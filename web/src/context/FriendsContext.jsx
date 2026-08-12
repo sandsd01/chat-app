@@ -1,5 +1,6 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useState } from 'react'
 import { useAuth } from './AuthContext'
+import { useChat } from './ChatContext'
 import {
   listFriends,
   listRequests,
@@ -14,13 +15,9 @@ import {
 
 const FriendsContext = createContext(null)
 
-// No live push for friend requests yet (see CLAUDE.md's Roadmap) — this
-// refetches on mount and after every action taken through it, which covers
-// the common case (you send/accept/decline in your own session) but won't
-// show a request that arrived while this tab was open and idle. A future
-// pass can fold friend events into the same SSE stream chat already uses.
 export function FriendsProvider({ children }) {
   const { token } = useAuth()
+  const { subscribeToFriendEvents } = useChat()
 
   const [friends, setFriends] = useState([])
   const [incoming, setIncoming] = useState([])
@@ -53,6 +50,19 @@ export function FriendsProvider({ children }) {
     }
     refresh()
   }, [token, refresh])
+
+  // Live updates: a "friend" event over the shared SSE stream (see
+  // ChatContext#subscribeToFriendEvents) means a request arrived or got
+  // accepted somewhere else — just refetch rather than trying to patch
+  // state from the event's bare `{ type }` payload, since a full refresh is
+  // cheap and keeps this in sync with the same source of truth the mount
+  // effect above already trusts.
+  useEffect(() => {
+    if (!token) return
+    return subscribeToFriendEvents(() => {
+      refresh()
+    })
+  }, [token, subscribeToFriendEvents, refresh])
 
   const sendRequest = useCallback(
     async (publicId) => {

@@ -20,6 +20,7 @@ export function ChatProvider({ children }) {
   const [connectionState, setConnectionState] = useState('reconnecting')
 
   const listenersRef = useRef(new Map()) // conversationId -> Set<(payload) => void>
+  const friendListenersRef = useRef(new Set())
   const esRef = useRef(null)
   const attemptRef = useRef(0)
   const retryTimerRef = useRef(null)
@@ -59,6 +60,16 @@ export function ChatProvider({ children }) {
     return () => {
       map.get(conversationId)?.delete(callback)
     }
+  }, [])
+
+  // FriendsContext hooks in here rather than opening a second SSE
+  // connection/ticket of its own — the server forwards a "friend" event over
+  // this same stream (src/routes/friends.js#publishFriendEvent) whenever a
+  // request arrives or gets accepted, and every listener just wants to know
+  // "something changed, refetch," not the payload details.
+  const subscribeToFriendEvents = useCallback((callback) => {
+    friendListenersRef.current.add(callback)
+    return () => friendListenersRef.current.delete(callback)
   }, [])
 
   const handleIncomingMessage = useCallback((payload) => {
@@ -123,6 +134,14 @@ export function ChatProvider({ children }) {
     es.addEventListener('message', (evt) => {
       try {
         handleIncomingMessage(JSON.parse(evt.data))
+      } catch {
+        // ignore malformed payloads
+      }
+    })
+    es.addEventListener('friend', (evt) => {
+      try {
+        const payload = JSON.parse(evt.data)
+        friendListenersRef.current.forEach((cb) => cb(payload))
       } catch {
         // ignore malformed payloads
       }
@@ -204,6 +223,7 @@ export function ChatProvider({ children }) {
       unreadTotal,
       refreshConversations,
       subscribeToConversation,
+      subscribeToFriendEvents,
       markConversationRead,
       startChat,
     }),
@@ -215,6 +235,7 @@ export function ChatProvider({ children }) {
       unreadTotal,
       refreshConversations,
       subscribeToConversation,
+      subscribeToFriendEvents,
       markConversationRead,
       startChat,
     ]

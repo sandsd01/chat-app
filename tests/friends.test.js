@@ -3,6 +3,7 @@ const assert = require("node:assert/strict");
 const request = require("supertest");
 const { resetDb, createUser, makeFriends, prisma } = require("./helpers/db");
 const app = require("../src/app");
+const chatBus = require("../src/lib/chatBus");
 
 async function login(email, password) {
   const res = await request(app).post("/api/auth/login").send({ email, password });
@@ -358,6 +359,75 @@ describe("Friends API", () => {
         .post(`/api/friends/${alice.id}/block`)
         .set("Authorization", `Bearer ${aliceToken}`);
       assert.equal(res.status, 400);
+    });
+  });
+
+  describe("Live SSE friend events (chatBus, mirrors the push-notification trigger points)", () => {
+    test("a new request publishes request_received to the recipient", async (t) => {
+      const published = [];
+      t.mock.method(chatBus, "publish", (userId, event, payload) => published.push({ userId, event, payload }));
+
+      const res = await request(app)
+        .post("/api/friends/requests")
+        .set("Authorization", `Bearer ${aliceToken}`)
+        .send({ publicId: bob.publicId });
+      assert.equal(res.status, 201);
+
+      assert.deepEqual(published, [{ userId: bob.id, event: "friend", payload: { type: "request_received" } }]);
+    });
+
+    test("accepting a request publishes request_accepted to the original sender", async (t) => {
+      const outgoing = await request(app)
+        .post("/api/friends/requests")
+        .set("Authorization", `Bearer ${aliceToken}`)
+        .send({ publicId: bob.publicId });
+      const requestId = outgoing.body.requestId;
+
+      const published = [];
+      t.mock.method(chatBus, "publish", (userId, event, payload) => published.push({ userId, event, payload }));
+
+      const res = await request(app)
+        .post(`/api/friends/requests/${requestId}/accept`)
+        .set("Authorization", `Bearer ${bobToken}`);
+      assert.equal(res.status, 200);
+
+      assert.deepEqual(published, [{ userId: alice.id, event: "friend", payload: { type: "request_accepted" } }]);
+    });
+
+    test("a mutual auto-accept (both sides request each other) publishes request_accepted to the original sender", async (t) => {
+      await request(app)
+        .post("/api/friends/requests")
+        .set("Authorization", `Bearer ${aliceToken}`)
+        .send({ publicId: bob.publicId });
+
+      const published = [];
+      t.mock.method(chatBus, "publish", (userId, event, payload) => published.push({ userId, event, payload }));
+
+      const res = await request(app)
+        .post("/api/friends/requests")
+        .set("Authorization", `Bearer ${bobToken}`)
+        .send({ publicId: alice.publicId });
+      assert.equal(res.status, 200);
+      assert.equal(res.body.status, "accepted");
+
+      assert.deepEqual(published, [{ userId: alice.id, event: "friend", payload: { type: "request_accepted" } }]);
+    });
+
+    test("declining or cancelling a request does not publish a friend event (matches the existing no-push behaviour)", async (t) => {
+      const outgoing = await request(app)
+        .post("/api/friends/requests")
+        .set("Authorization", `Bearer ${aliceToken}`)
+        .send({ publicId: bob.publicId });
+      const requestId = outgoing.body.requestId;
+
+      const published = [];
+      t.mock.method(chatBus, "publish", (userId, event, payload) => published.push({ userId, event, payload }));
+
+      const res = await request(app)
+        .post(`/api/friends/requests/${requestId}/decline`)
+        .set("Authorization", `Bearer ${bobToken}`);
+      assert.equal(res.status, 204);
+      assert.deepEqual(published, []);
     });
   });
 });
