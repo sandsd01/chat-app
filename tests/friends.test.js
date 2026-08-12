@@ -3,10 +3,20 @@ const assert = require("node:assert/strict");
 const request = require("supertest");
 const { resetDb, createUser, makeFriends, prisma } = require("./helpers/db");
 const app = require("../src/app");
+const chatBus = require("../src/lib/chatBus");
 
 async function login(email, password) {
   const res = await request(app).post("/api/auth/login").send({ email, password });
   return res.body.token;
+}
+
+// chatBus is an in-process EventEmitter and these tests import src/app.js
+// directly, so we can listen on the real bus rather than mocking it — this
+// asserts the actual publish, not a stand-in for one.
+function captureEvents(userId) {
+  const received = [];
+  const unsubscribe = chatBus.subscribe(userId, (event, payload) => received.push({ event, payload }));
+  return { received, unsubscribe };
 }
 
 describe("Friends API", () => {
@@ -358,6 +368,87 @@ describe("Friends API", () => {
         .post(`/api/friends/${alice.id}/block`)
         .set("Authorization", `Bearer ${aliceToken}`);
       assert.equal(res.status, 400);
+    });
+  });
+
+  describe("live friend events on chatBus", () => {
+    test("sending a request publishes { type: 'request' } to the recipient only", async () => {
+      const bobEvents = captureEvents(bob.id);
+      const carolEvents = captureEvents(carol.id);
+
+      const res = await request(app)
+        .post("/api/friends/requests")
+        .set("Authorization", `Bearer ${aliceToken}`)
+        .send({ publicId: bob.publicId });
+
+      bobEvents.unsubscribe();
+      carolEvents.unsubscribe();
+
+      assert.equal(res.status, 201);
+      assert.deepEqual(bobEvents.received, [{ event: "friend", payload: { type: "request" } }]);
+      assert.deepEqual(carolEvents.received, []);
+    });
+
+    test("accepting a request publishes { type: 'accepted' } to the requester only", async () => {
+      const sent = await request(app)
+        .post("/api/friends/requests")
+        .set("Authorization", `Bearer ${aliceToken}`)
+        .send({ publicId: bob.publicId });
+
+      const aliceEvents = captureEvents(alice.id);
+      const carolEvents = captureEvents(carol.id);
+
+      const res = await request(app)
+        .post(`/api/friends/requests/${sent.body.requestId}/accept`)
+        .set("Authorization", `Bearer ${bobToken}`);
+
+      aliceEvents.unsubscribe();
+      carolEvents.unsubscribe();
+
+      assert.equal(res.status, 200);
+      assert.deepEqual(aliceEvents.received, [{ event: "friend", payload: { type: "accepted" } }]);
+      assert.deepEqual(carolEvents.received, []);
+    });
+
+    test("the mutual-request auto-accept path publishes { type: 'accepted' }", async () => {
+      await request(app)
+        .post("/api/friends/requests")
+        .set("Authorization", `Bearer ${aliceToken}`)
+        .send({ publicId: bob.publicId });
+
+      const aliceEvents = captureEvents(alice.id);
+
+      // Bob requests Alice back while her request is still pending — this
+      // flips the existing row straight to accepted instead of creating a
+      // second one, and Alice is the one who needs telling.
+      const res = await request(app)
+        .post("/api/friends/requests")
+        .set("Authorization", `Bearer ${bobToken}`)
+        .send({ publicId: alice.publicId });
+
+      aliceEvents.unsubscribe();
+
+      assert.equal(res.status, 200);
+      assert.equal(res.body.status, "accepted");
+      assert.deepEqual(aliceEvents.received, [{ event: "friend", payload: { type: "accepted" } }]);
+    });
+
+    test("declining publishes nothing (out of scope for live updates)", async () => {
+      const sent = await request(app)
+        .post("/api/friends/requests")
+        .set("Authorization", `Bearer ${aliceToken}`)
+        .send({ publicId: bob.publicId });
+
+      const aliceEvents = captureEvents(alice.id);
+
+      const res = await request(app)
+        .post(`/api/friends/requests/${sent.body.requestId}/decline`)
+        .set("Authorization", `Bearer ${bobToken}`);
+
+      aliceEvents.unsubscribe();
+
+      assert.equal(res.status, 204);
+      assert.deepEqual(aliceEvents.received, []);
     });
   });
 });

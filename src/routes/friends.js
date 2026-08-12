@@ -2,17 +2,21 @@ const express = require("express");
 const prisma = require("../../prisma/client");
 const { authenticate } = require("../middleware/auth");
 const { sendPushToUser } = require("../lib/push");
+const chatBus = require("../lib/chatBus");
 
 const router = express.Router();
 router.use(authenticate);
 
-// Friend requests have no SSE stream of their own (see CLAUDE.md's Roadmap —
-// FriendsContext only refetches on mount/action), so unlike chat messages
-// this can't check "does the recipient already have this over a live
-// connection" first. It pushes unconditionally rather than gating on
-// chatBus.hasSubscribers, which would only tell us they have a *chat*
-// stream open, not that they've seen the request.
-async function notify(userId, title, body) {
+// Friend events ride the same per-user chatBus channel chat messages use, so
+// a client with the shared SSE stream open picks them up live (see
+// web/src/context/StreamContext.jsx). Unlike chat's send path this does NOT
+// gate the push on chatBus.hasSubscribers: an open stream means the tab is
+// connected, not that the person has seen the request — they may be on a
+// different route entirely, or the tab may be backgrounded. So both fire.
+// `payload` is the chatBus payload, not the event name; the event name is
+// always the literal "friend".
+async function notify(userId, title, body, payload) {
+  chatBus.publish(userId, "friend", payload);
   sendPushToUser(userId, { title, body }).catch((err) => console.error("Push notification failed:", err));
 }
 
@@ -108,7 +112,7 @@ router.post("/requests", async (req, res) => {
       data: { userAId, userBId, status: "pending", requestedById: meId },
     });
     const me = await prisma.user.findUnique({ where: { id: meId }, select: { name: true, email: true } });
-    notify(target.id, "New friend request", me.name || me.email);
+    notify(target.id, "New friend request", me.name || me.email, { type: "request" });
     return res.status(201).json({ requestId: created.id, status: "pending" });
   }
 
@@ -130,7 +134,9 @@ router.post("/requests", async (req, res) => {
     data: { status: "accepted", respondedAt: new Date() },
   });
   const me = await prisma.user.findUnique({ where: { id: meId }, select: { name: true, email: true } });
-  notify(target.id, "Friend request accepted", `${me.name || me.email} accepted your request`);
+  notify(target.id, "Friend request accepted", `${me.name || me.email} accepted your request`, {
+    type: "accepted",
+  });
   res.status(200).json({ requestId: accepted.id, status: "accepted" });
 });
 
@@ -155,7 +161,9 @@ router.post("/requests/:id/accept", async (req, res) => {
     data: { status: "accepted", respondedAt: new Date() },
   });
   const me = await prisma.user.findUnique({ where: { id: req.user.id }, select: { name: true, email: true } });
-  notify(row.requestedById, "Friend request accepted", `${me.name || me.email} accepted your request`);
+  notify(row.requestedById, "Friend request accepted", `${me.name || me.email} accepted your request`, {
+    type: "accepted",
+  });
   res.json({ status: "accepted" });
 });
 
