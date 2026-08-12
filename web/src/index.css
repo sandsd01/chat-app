@@ -436,6 +436,69 @@ td:has(+ td) {
   }
 }
 
+/* ---- Friends (add-by-ID) -------------------------------------------------- */
+
+/* .card defaults to a narrow 400px, sized for a login form — these are list
+   pages, so let them use the full .content width instead. */
+.card-wide {
+  max-width: none;
+}
+
+/* Plain small captions ("Your ID", inline request status) — .hint is styled
+   as a boxed message and reads as an empty input/disabled button when used
+   for a one-line label instead. */
+.friends-caption {
+  display: block;
+  font-size: 13px;
+  color: var(--text-muted);
+}
+
+.friends-own-id-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.friends-id-code {
+  font-size: 22px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  padding: 8px 14px;
+  background: var(--bg-subtle);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  font-variant-numeric: tabular-nums;
+}
+
+.friends-lookup-form {
+  display: flex;
+  gap: 8px;
+  margin-bottom: 12px;
+}
+
+.friends-lookup-form .search-input {
+  flex: 1;
+  max-width: none;
+}
+
+.friend-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 0;
+  border-bottom: 1px solid var(--border);
+  flex-wrap: wrap;
+}
+
+.friend-row:last-child {
+  border-bottom: none;
+}
+
+.friend-row .chat-conversation-main {
+  flex: 1;
+  min-width: 120px;
+}
+
 /* ---- Chat (1:1 direct messages) -----------------------------------------
    A back-office screen checked between POS tasks, sometimes on a phone: list
    pane + thread pane side by side above 780px — the same width pos-layout

@@ -9,6 +9,54 @@ function hashToken(token) {
   return crypto.createHash("sha256").update(token).digest("hex");
 }
 
+describe("POST /auth/signup", () => {
+  beforeEach(async () => {
+    await resetDb();
+  });
+
+  test("creates an account with a token and a generated publicId", async () => {
+    const res = await request(app)
+      .post("/api/auth/signup")
+      .send({ email: "newbie@test.com", password: "newbiepass1", name: "Newbie" });
+    assert.equal(res.status, 201);
+    assert.ok(res.body.token);
+    assert.equal(res.body.user.email, "newbie@test.com");
+    assert.equal(res.body.user.name, "Newbie");
+    assert.match(res.body.user.publicId, /^[2-9A-HJ-NP-Z]{8}$/);
+    assert.equal(res.body.user.passwordHash, undefined);
+  });
+
+  test("requires email and password", async () => {
+    const res = await request(app).post("/api/auth/signup").send({ email: "newbie@test.com" });
+    assert.equal(res.status, 400);
+  });
+
+  test("rejects a password shorter than 8 characters", async () => {
+    const res = await request(app)
+      .post("/api/auth/signup")
+      .send({ email: "newbie@test.com", password: "short" });
+    assert.equal(res.status, 400);
+  });
+
+  test("409s on a duplicate email", async () => {
+    await createUser({ email: "dup@test.com", password: "duppass1" });
+    const res = await request(app)
+      .post("/api/auth/signup")
+      .send({ email: "dup@test.com", password: "anotherpass1" });
+    assert.equal(res.status, 409);
+  });
+
+  test("two signups never collide on publicId", async () => {
+    const a = await request(app)
+      .post("/api/auth/signup")
+      .send({ email: "a@test.com", password: "apassword1" });
+    const b = await request(app)
+      .post("/api/auth/signup")
+      .send({ email: "b@test.com", password: "bpassword1" });
+    assert.notEqual(a.body.user.publicId, b.body.user.publicId);
+  });
+});
+
 describe("POST /auth/login", () => {
   beforeEach(async () => {
     await resetDb();

@@ -46,13 +46,19 @@ export function AuthProvider({ children }) {
     setUser(data.user)
   }
 
+  async function signup(email, password, name) {
+    const data = await apiFetch('/auth/signup', { method: 'POST', body: { email, password, name } })
+    setToken(data.token)
+    setUser(data.user)
+  }
+
   function logout() {
     setToken(null)
     setUser(null)
   }
 
   return (
-    <AuthContext.Provider value={{ token, user, login, logout }}>
+    <AuthContext.Provider value={{ token, user, login, signup, logout }}>
       {children}
     </AuthContext.Provider>
   )

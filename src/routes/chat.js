@@ -3,6 +3,7 @@ const express = require("express");
 const prisma = require("../../prisma/client");
 const { authenticate } = require("../middleware/auth");
 const chatBus = require("../lib/chatBus");
+const { areFriends } = require("./friends");
 
 const router = express.Router();
 
@@ -71,24 +72,12 @@ router.get("/stream", (req, res) => {
 
 router.use(authenticate);
 
-// --- User search ----------------------------------------------------------
-
-router.get("/users", async (req, res) => {
-  const q = typeof req.query.q === "string" ? req.query.q.trim() : "";
-  if (!q) return res.json([]);
-
-  const users = await prisma.user.findMany({
-    where: {
-      id: { not: req.user.id },
-      OR: [{ name: { contains: q, mode: "insensitive" } }, { email: { contains: q, mode: "insensitive" } }],
-    },
-    select: PUBLIC_USER_SELECT,
-    take: 20,
-    orderBy: { email: "asc" },
-  });
-
-  res.json(users);
-});
+// User discovery is no longer an open directory search here — GET
+// /api/friends/lookup?publicId= (src/routes/friends.js) is the only way to
+// find another account, and only by the exact code they shared with you.
+// Browsing every registered user by name/email is a real privacy problem
+// once signup is public, so that route was removed rather than kept as a
+// second, looser way to find people.
 
 // --- Conversations ----------------------------------------------------------
 
@@ -171,6 +160,10 @@ router.post("/conversations", async (req, res) => {
   const target = await prisma.user.findUnique({ where: { id: targetId } });
   if (!target) return res.status(404).json({ error: "User not found" });
 
+  if (!(await areFriends(meId, targetId))) {
+    return res.status(403).json({ error: "You can only message accounts you're friends with" });
+  }
+
   // Canonicalise the pair so the unique index gives us an idempotent
   // find-or-create with no separate participants table to reason about.
   const userAId = Math.min(meId, targetId);
@@ -226,6 +219,14 @@ router.post("/conversations/:id/messages", async (req, res) => {
   const conversationId = Number(req.params.id);
   const conversation = await getConversationForParticipant(conversationId, req.user.id);
   if (!conversation) return res.status(404).json({ error: "Conversation not found" });
+
+  // Re-checked at send time, not just at conversation creation: either side
+  // may have unfriended (or blocked) the other since, and old messages
+  // should stay readable without new ones being sendable.
+  const otherUserId = conversation.userAId === req.user.id ? conversation.userBId : conversation.userAId;
+  if (!(await areFriends(req.user.id, otherUserId))) {
+    return res.status(403).json({ error: "You can only message accounts you're friends with" });
+  }
 
   const body = typeof req.body?.body === "string" ? req.body.body.trim() : "";
   if (!body) {

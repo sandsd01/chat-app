@@ -3,7 +3,8 @@ import { Link, useNavigate, useParams } from 'react-router-dom'
 import { useAuth } from '../context/AuthContext'
 import { useLanguage } from '../context/LanguageContext'
 import { useChat } from '../context/ChatContext'
-import { listMessages, sendMessage, searchUsers } from '../api/chat'
+import { useFriends } from '../context/FriendsContext'
+import { listMessages, sendMessage } from '../api/chat'
 
 const MESSAGE_PAGE_SIZE = 50
 const SCROLL_BOTTOM_THRESHOLD = 80
@@ -63,14 +64,17 @@ export function ChatPage() {
     markConversationRead,
     startChat,
   } = useChat()
+  const { friends } = useFriends()
 
   const activeConversationId = conversationIdParam ? Number(conversationIdParam) : null
   const activeConversation = conversations.find((c) => c.id === activeConversationId) || null
 
-  // -- Search-to-start ------------------------------------------------------
+  // -- Search-to-start --------------------------------------------------------
+  // "People to message" is now exactly your friends list (see friends.js /
+  // FriendsPage — you must already be friends to start a conversation), so
+  // this is a client-side filter against data already loaded, not a server
+  // search hitting a directory of every registered user.
   const [query, setQuery] = useState('')
-  const [userResults, setUserResults] = useState([])
-  const [searching, setSearching] = useState(false)
   const [startError, setStartError] = useState(null)
 
   const filteredConversations = useMemo(() => {
@@ -87,46 +91,33 @@ export function ChatPage() {
     )
   }, [conversations, query])
 
-  useEffect(() => {
-    const q = query.trim()
-    if (!q) {
-      setUserResults([])
-      setSearching(false)
-      return
-    }
-    setSearching(true)
-    const handle = setTimeout(() => {
-      searchUsers(q, token)
-        .then(setUserResults)
-        .catch(() => setUserResults([]))
-        .finally(() => setSearching(false))
-    }, 300)
-    return () => clearTimeout(handle)
-  }, [query, token])
-
-  const visibleUserResults = useMemo(() => {
+  const visibleFriends = useMemo(() => {
+    const q = query.trim().toLowerCase()
     const shownIds = new Set(filteredConversations.map((c) => c.otherUser.id))
-    return userResults.filter((u) => !shownIds.has(u.id))
-  }, [userResults, filteredConversations])
+    return friends
+      .map((f) => f.otherUser)
+      .filter((u) => !shownIds.has(u.id))
+      .filter((u) => {
+        if (!q) return false // only surface "start a new chat" once the user is searching
+        const name = (u.name || '').toLowerCase()
+        return name.includes(q) || u.email.toLowerCase().includes(q)
+      })
+  }, [friends, filteredConversations, query])
 
   // Each section heading only earns its place when something sits under it —
-  // "People / No matches found" above a list of matched conversations reads as
-  // if the search failed. When neither side matches, one message covers both.
+  // "Friends / No matches found" above a list of matched conversations reads
+  // as if the search failed. When neither side matches, one message covers both.
   const trimmedQuery = query.trim()
-  const showPeopleSection = Boolean(trimmedQuery) && (searching || visibleUserResults.length > 0)
+  const showFriendsSection = Boolean(trimmedQuery) && visibleFriends.length > 0
   const showConversationsHeading = Boolean(trimmedQuery) && filteredConversations.length > 0
   const showNoMatches =
-    Boolean(trimmedQuery) &&
-    !searching &&
-    visibleUserResults.length === 0 &&
-    filteredConversations.length === 0
+    Boolean(trimmedQuery) && visibleFriends.length === 0 && filteredConversations.length === 0
 
   async function handleStartChat(targetUser) {
     setStartError(null)
     try {
       const summary = await startChat(targetUser.id)
       setQuery('')
-      setUserResults([])
       navigate(`/chat/${summary.id}`)
     } catch (err) {
       setStartError(err.message)
@@ -305,28 +296,23 @@ export function ChatPage() {
             {conversationsError && <p className="error">{t('chat.loadError')}</p>}
             {startError && <p className="error">{startError}</p>}
 
-            {showPeopleSection && (
+            {showFriendsSection && (
               <>
-                <div className="chat-list-section-label">{t('chat.sectionPeople')}</div>
-                {searching ? (
-                  <p className="hint">{t('common.loading')}</p>
-                ) : (
-                  visibleUserResults.map((u) => (
-                    <button
-                      key={u.id}
-                      type="button"
-                      className="chat-user-result"
-                      onClick={() => handleStartChat(u)}
-                    >
-                      <span className="chat-avatar">{initials(u.name || u.email)}</span>
-                      <span className="chat-conversation-main">
-                        <span className="chat-conversation-name">{u.name || u.email}</span>
-                        {u.name && <span className="chat-conversation-preview">{u.email}</span>}
-                      </span>
-                      <span className="chat-user-result-sub">{u.role}</span>
-                    </button>
-                  ))
-                )}
+                <div className="chat-list-section-label">{t('chat.sectionFriends')}</div>
+                {visibleFriends.map((u) => (
+                  <button
+                    key={u.id}
+                    type="button"
+                    className="chat-user-result"
+                    onClick={() => handleStartChat(u)}
+                  >
+                    <span className="chat-avatar">{initials(u.name || u.email)}</span>
+                    <span className="chat-conversation-main">
+                      <span className="chat-conversation-name">{u.name || u.email}</span>
+                      {u.name && <span className="chat-conversation-preview">{u.email}</span>}
+                    </span>
+                  </button>
+                ))}
               </>
             )}
 
@@ -343,6 +329,9 @@ export function ChatPage() {
                 <div className="chat-empty">
                   <strong>{t('chat.noConversationsTitle')}</strong>
                   <span>{t('chat.noConversationsBody')}</span>
+                  <Link to="/friends" className="button">
+                    {t('chat.addFriendsLink')}
+                  </Link>
                 </div>
               )
             ) : (

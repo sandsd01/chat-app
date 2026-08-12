@@ -2,7 +2,7 @@ const { test, describe, beforeEach } = require("node:test");
 const assert = require("node:assert/strict");
 const http = require("node:http");
 const request = require("supertest");
-const { resetDb, createUser, prisma } = require("./helpers/db");
+const { resetDb, createUser, makeFriends, prisma } = require("./helpers/db");
 const app = require("../src/app");
 
 async function login(email, password) {
@@ -51,55 +51,70 @@ describe("Chat API", () => {
     adminToken = await login("admin@test.com", "adminpass1");
     staffToken = await login("staff@test.com", "staffpass1");
     otherToken = await login("other@test.com", "otherpass1");
+    // The chat routes below are about conversation/message mechanics, not the
+    // friend gate itself (see friends.test.js and the "friend gating" block
+    // further down) — pre-friend everyone so those tests don't have to.
+    await makeFriends(adminUser, staffUser);
+    await makeFriends(adminUser, otherUser);
+    await makeFriends(staffUser, otherUser);
   });
 
-  describe("GET /chat/users", () => {
-    test("requires authentication", async () => {
-      const res = await request(app).get("/api/chat/users?q=staff");
-      assert.equal(res.status, 401);
-    });
-
-    test("returns [] when q is missing or empty", async () => {
-      const missing = await request(app).get("/api/chat/users").set("Authorization", `Bearer ${adminToken}`);
-      assert.equal(missing.status, 200);
-      assert.deepEqual(missing.body, []);
-
-      const empty = await request(app)
-        .get("/api/chat/users?q=")
-        .set("Authorization", `Bearer ${adminToken}`);
-      assert.equal(empty.status, 200);
-      assert.deepEqual(empty.body, []);
-    });
-
-    test("excludes self and matches case-insensitively on name or email, returning only public fields", async () => {
-      await prisma.user.update({ where: { id: staffUser.id }, data: { name: "Sandy Staffer" } });
-
-      const byEmailFragment = await request(app)
-        .get("/api/chat/users?q=STAFF")
-        .set("Authorization", `Bearer ${adminToken}`);
-      assert.equal(byEmailFragment.status, 200);
-      const emails = byEmailFragment.body.map((u) => u.email);
-      assert.ok(emails.includes("staff@test.com"));
-      assert.ok(!emails.includes("admin@test.com"), "must not include self");
-
-      for (const u of byEmailFragment.body) {
-        assert.deepEqual(Object.keys(u).sort(), ["email", "id", "name"]);
-      }
-
-      const byName = await request(app)
-        .get("/api/chat/users?q=sandy")
-        .set("Authorization", `Bearer ${adminToken}`);
-      assert.equal(byName.status, 200);
-      assert.equal(byName.body.length, 1);
-      assert.equal(byName.body[0].id, staffUser.id);
-    });
-
-    test("a search matching self does not return self", async () => {
+  describe("friend gating on POST /chat/conversations and sending", () => {
+    test("403s starting a conversation with a non-friend", async () => {
+      const stranger = await createUser({ email: "stranger@test.com", password: "strangerpass1" });
       const res = await request(app)
-        .get("/api/chat/users?q=admin")
+        .post("/api/chat/conversations")
+        .set("Authorization", `Bearer ${adminToken}`)
+        .send({ userId: stranger.id });
+      assert.equal(res.status, 403);
+    });
+
+    test("a pending (not yet accepted) request does not satisfy the gate", async () => {
+      const stranger = await createUser({ email: "pending@test.com", password: "pendingpass1" });
+      await prisma.friendship.create({
+        data: {
+          userAId: Math.min(adminUser.id, stranger.id),
+          userBId: Math.max(adminUser.id, stranger.id),
+          status: "pending",
+          requestedById: adminUser.id,
+        },
+      });
+      const res = await request(app)
+        .post("/api/chat/conversations")
+        .set("Authorization", `Bearer ${adminToken}`)
+        .send({ userId: stranger.id });
+      assert.equal(res.status, 403);
+    });
+
+    test("unfriending after a conversation exists blocks new sends but not reading history", async () => {
+      const conv = await request(app)
+        .post("/api/chat/conversations")
+        .set("Authorization", `Bearer ${adminToken}`)
+        .send({ userId: staffUser.id });
+      assert.equal(conv.status, 201); // first conversation between this already-friended pair
+
+      const sent = await request(app)
+        .post(`/api/chat/conversations/${conv.body.id}/messages`)
+        .set("Authorization", `Bearer ${adminToken}`)
+        .send({ body: "before unfriending" });
+      assert.equal(sent.status, 201);
+
+      await request(app)
+        .delete(`/api/friends/${staffUser.id}`)
         .set("Authorization", `Bearer ${adminToken}`);
-      assert.equal(res.status, 200);
-      assert.ok(!res.body.some((u) => u.id === adminUser.id));
+
+      const blockedSend = await request(app)
+        .post(`/api/chat/conversations/${conv.body.id}/messages`)
+        .set("Authorization", `Bearer ${adminToken}`)
+        .send({ body: "after unfriending" });
+      assert.equal(blockedSend.status, 403);
+
+      const history = await request(app)
+        .get(`/api/chat/conversations/${conv.body.id}/messages`)
+        .set("Authorization", `Bearer ${adminToken}`);
+      assert.equal(history.status, 200);
+      assert.equal(history.body.data.length, 1);
+      assert.equal(history.body.data[0].body, "before unfriending");
     });
   });
 
@@ -536,6 +551,7 @@ describe("Chat API", () => {
     test("409s when the caller has a conversation, matching the route's response shape", async () => {
       const chatty = await createUser({ email: "chatty@test.com", password: "pass12345" });
       const chattyToken = await login("chatty@test.com", "pass12345");
+      await makeFriends(chatty, staffUser);
 
       const conv = await request(app)
         .post("/api/chat/conversations")

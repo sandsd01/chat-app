@@ -6,6 +6,7 @@ const prisma = require("../../prisma/client");
 const { authenticate } = require("../middleware/auth");
 const { authLimiter } = require("../middleware/rateLimit");
 const { sendPasswordResetEmail } = require("../lib/email");
+const { createUserWithUniquePublicId } = require("../lib/publicId");
 
 const router = express.Router();
 
@@ -16,6 +17,44 @@ const RESET_TOKEN_EXPIRY_MS = 30 * 60 * 1000;
 function hashToken(token) {
   return crypto.createHash("sha256").update(token).digest("hex");
 }
+
+function signToken(user) {
+  return jwt.sign({ sub: user.id, email: user.email }, process.env.JWT_SECRET, { expiresIn: "8h" });
+}
+
+function publicUser(user) {
+  return { id: user.id, publicId: user.publicId, email: user.email, name: user.name };
+}
+
+// Minimal email+password self-signup. This is a placeholder for the Google
+// sign-in phase (see CLAUDE.md's Roadmap) — kept intentionally bare (no email
+// verification, no CAPTCHA) because it exists only so the friend-by-ID system
+// has real accounts to test against locally, not as the production signup
+// flow. Revisit rate limiting and abuse protection before this is the only
+// way to create an account in a public deployment.
+router.post("/signup", authLimiter, async (req, res) => {
+  const { email, password, name } = req.body || {};
+  if (!email || !password) {
+    return res.status(400).json({ error: "email and password are required" });
+  }
+  if (password.length < 8) {
+    return res.status(400).json({ error: "password must be at least 8 characters" });
+  }
+
+  const existing = await prisma.user.findUnique({ where: { email } });
+  if (existing) {
+    return res.status(409).json({ error: "An account with this email already exists" });
+  }
+
+  const passwordHash = await bcrypt.hash(password, 10);
+  const user = await createUserWithUniquePublicId(prisma, {
+    email,
+    passwordHash,
+    name: name || undefined,
+  });
+
+  res.status(201).json({ token: signToken(user), user: publicUser(user) });
+});
 
 router.post("/login", authLimiter, async (req, res) => {
   const { email, password } = req.body || {};
@@ -62,26 +101,14 @@ router.post("/login", authLimiter, async (req, res) => {
     });
   }
 
-  const token = jwt.sign({ sub: user.id, email: user.email }, process.env.JWT_SECRET, {
-    expiresIn: "8h",
-  });
-
-  res.json({
-    token,
-    user: { id: user.id, email: user.email, name: user.name },
-  });
+  res.json({ token: signToken(user), user: publicUser(user) });
 });
 
 router.get("/me", authenticate, async (req, res) => {
   const user = await prisma.user.findUnique({ where: { id: req.user.id } });
   if (!user) return res.status(404).json({ error: "User not found" });
 
-  res.json({
-    id: user.id,
-    email: user.email,
-    name: user.name,
-    createdAt: user.createdAt,
-  });
+  res.json({ ...publicUser(user), createdAt: user.createdAt });
 });
 
 router.post("/logout", (_req, res) => {

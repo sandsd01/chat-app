@@ -3,13 +3,14 @@ import { Link, useNavigate } from 'react-router-dom'
 import { useAuth } from '../context/AuthContext'
 import { useLanguage } from '../context/LanguageContext'
 
-export function LoginPage() {
+export function SignupPage() {
   const [email, setEmail] = useState('')
+  const [name, setName] = useState('')
   const [password, setPassword] = useState('')
   const [error, setError] = useState(null)
   const [loading, setLoading] = useState(false)
-  const { login } = useAuth()
-  const { language, setLanguage, t } = useLanguage()
+  const { signup } = useAuth()
+  const { t } = useLanguage()
   const navigate = useNavigate()
 
   async function handleSubmit(e) {
@@ -17,7 +18,7 @@ export function LoginPage() {
     setError(null)
     setLoading(true)
     try {
-      await login(email, password)
+      await signup(email, password, name)
       navigate('/')
     } catch (err) {
       setError(err.message)
@@ -29,27 +30,15 @@ export function LoginPage() {
   return (
     <div className="centered">
       <form className="card" onSubmit={handleSubmit}>
-        <div className="page-header">
-          <h1>{t('login.title')}</h1>
-          <select
-            className="language-select"
-            value={language}
-            onChange={(e) => setLanguage(e.target.value)}
-            aria-label="Language"
-          >
-            <option value="en">EN</option>
-            <option value="th">ไทย</option>
-          </select>
-        </div>
+        <h1>{t('signup.title')}</h1>
         {error && <p className="error">{error}</p>}
         <label>
+          {t('signup.name')}
+          <input type="text" value={name} onChange={(e) => setName(e.target.value)} />
+        </label>
+        <label>
           {t('login.email')}
-          <input
-            type="email"
-            value={email}
-            onChange={(e) => setEmail(e.target.value)}
-            required
-          />
+          <input type="email" value={email} onChange={(e) => setEmail(e.target.value)} required />
         </label>
         <label>
           {t('login.password')}
@@ -57,14 +46,14 @@ export function LoginPage() {
             type="password"
             value={password}
             onChange={(e) => setPassword(e.target.value)}
+            minLength={8}
             required
           />
         </label>
         <button type="submit" disabled={loading}>
-          {loading ? t('login.submitting') : t('login.submit')}
+          {loading ? t('signup.submitting') : t('signup.submit')}
         </button>
-        <Link to="/forgot-password">{t('login.forgotPassword')}</Link>
-        <Link to="/signup">{t('login.needAccount')}</Link>
+        <Link to="/login">{t('login.backToLogin')}</Link>
       </form>
     </div>
   )
