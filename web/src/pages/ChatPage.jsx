@@ -423,7 +423,7 @@ export function ChatPage() {
                           </div>
                         )}
                         <div className={`chat-bubble-row ${mine ? 'mine' : 'theirs'}${m.failed ? ' failed' : ''}`}>
-                          <div>
+                          <div className="chat-bubble-wrap">
                             <div className="chat-bubble">
                               {m.body}
                               <span className="chat-bubble-time">{formatTime(m.createdAt, language)}</span>

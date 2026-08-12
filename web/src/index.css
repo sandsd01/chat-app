@@ -834,8 +834,24 @@ td:has(+ td) {
   justify-content: flex-start;
 }
 
-.chat-bubble {
+/* The actual flex item inside .chat-bubble-row (it also holds
+   .chat-bubble-error below the bubble on a failed send). Flex items default
+   to an automatic min-width based on min-content, and .chat-bubble's
+   word-break: break-word lets that min-content shrink to a single
+   character — without an explicit width here, this wrapper collapses to a
+   one-character-wide column and every character of the message (and its
+   timestamp) wraps onto its own line. width: fit-content sizes it to its
+   actual (shrink-to-fit) content instead, capped by max-width so a long
+   message still wraps rather than spanning the whole thread pane. The cap
+   lives here rather than on .chat-bubble itself — a percentage max-width on
+   .chat-bubble would resolve against this already-shrink-to-fit wrapper and
+   create a circular sizing dependency. */
+.chat-bubble-wrap {
+  width: fit-content;
   max-width: min(72%, 480px);
+}
+
+.chat-bubble {
   padding: 10px 14px;
   border-radius: 16px;
   font-size: 15px;
@@ -951,7 +967,7 @@ td:has(+ td) {
     display: inline-flex;
   }
 
-  .chat-bubble {
+  .chat-bubble-wrap {
     max-width: 84%;
   }
 }
