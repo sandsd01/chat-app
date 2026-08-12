@@ -1,5 +1,6 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useState } from 'react'
 import { useAuth } from './AuthContext'
+import { useStream } from './StreamContext'
 import {
   listFriends,
   listRequests,
@@ -14,13 +15,14 @@ import {
 
 const FriendsContext = createContext(null)
 
-// No live push for friend requests yet (see CLAUDE.md's Roadmap) — this
-// refetches on mount and after every action taken through it, which covers
-// the common case (you send/accept/decline in your own session) but won't
-// show a request that arrived while this tab was open and idle. A future
-// pass can fold friend events into the same SSE stream chat already uses.
+// Friend requests and acceptances arrive live over the shared SSE stream as
+// `friend` events (see StreamContext), on top of the refetch-on-mount and
+// refetch-after-every-action this already did. Decline, cancel, unfriend and
+// block publish nothing and stay stale-until-refetch — they're out of scope
+// deliberately, not missed.
 export function FriendsProvider({ children }) {
   const { token } = useAuth()
+  const { subscribe } = useStream()
 
   const [friends, setFriends] = useState([])
   const [incoming, setIncoming] = useState([])
@@ -53,6 +55,11 @@ export function FriendsProvider({ children }) {
     }
     refresh()
   }, [token, refresh])
+
+  // Just refetch rather than patching state from the payload: it's two cheap
+  // queries, it's the exact function every button handler already calls, and
+  // it can't drift from server state the way hand-patched local state can.
+  useEffect(() => subscribe('friend', () => refresh()), [subscribe, refresh])
 
   const sendRequest = useCallback(
     async (publicId) => {
