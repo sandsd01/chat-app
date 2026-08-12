@@ -123,8 +123,55 @@ a {
 
 .centered {
   display: flex;
+  flex-direction: column;
+  align-items: center;
   justify-content: center;
   padding-top: 48px;
+}
+
+/* Auth pages only (see LoginPage/SignupPage/ForgotPasswordPage/
+   ResetPasswordPage) — a small brand mark above the card so those pages
+   read as belonging to this product rather than a bare admin form. */
+.auth-brand {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 20px;
+  font-size: 20px;
+  font-weight: 700;
+  color: var(--text);
+}
+
+.auth-brand-mark {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 36px;
+  height: 36px;
+  border-radius: 10px;
+  background: var(--accent);
+  color: var(--accent-contrast);
+  font-size: 18px;
+}
+
+/* A labeled rule between the primary sign-in action and "Continue with
+   Google" — without it the two buttons read as sequential steps rather
+   than alternative ways to do the same thing. */
+.divider {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin: 2px 0;
+  color: var(--text-muted);
+  font-size: 13px;
+}
+
+.divider::before,
+.divider::after {
+  content: '';
+  flex: 1;
+  height: 1px;
+  background: var(--border);
 }
 
 .card {
@@ -288,6 +335,32 @@ button.danger {
   background: var(--danger);
   border-color: var(--danger);
   color: var(--accent-contrast);
+}
+
+/* A row-level destructive action (e.g. "Block" next to "Message"/"Remove" in
+   a friend row) still needs to read as destructive, but a full solid-red
+   fill gives it the same visual weight as the row's primary action —
+   outlined-in-danger-colour keeps it recognisably different without
+   competing for the eye first. Reserve the solid button.danger above for an
+   actual confirmation step (a dialog's "Yes, delete"), not a list row. */
+button.btn-secondary-danger {
+  background: var(--bg);
+  color: var(--danger);
+  border: 1px solid var(--danger);
+}
+
+button.btn-secondary-danger:hover:not(:disabled) {
+  background: var(--danger-bg);
+}
+
+/* Separates unrelated settings sections on a page like Account, which
+   otherwise reads as one continuous block once it has more than one h2 in
+   it — the browser default hr's beveled 3D look doesn't fit this design's
+   flat surfaces, so it's reset to a single hairline. */
+.section-divider {
+  border: none;
+  border-top: 1px solid var(--border);
+  margin: 8px 0 4px;
 }
 
 /* Labels were 14px and easy to skip past when filling a form in a hurry. */
@@ -969,5 +1042,19 @@ td:has(+ td) {
 
   .chat-bubble-wrap {
     max-width: 84%;
+  }
+
+  /* Once a thread is open on mobile there's no reason to keep spending
+     ~15% of viewport height on a page title that just repeats what the
+     thread's own header ("Bob", with the back arrow) already says —
+     reclaim it for the conversation. The .chat-layout height below is
+     recalculated to match, since it's set as "100% of the screen minus
+     the chrome above it" and that chrome just got shorter. */
+  .chat-page.show-thread h1 {
+    display: none;
+  }
+
+  .chat-page.show-thread .chat-layout {
+    height: calc(100svh - 140px);
   }
 }

@@ -41,6 +41,10 @@ export function LoginPage() {
 
   return (
     <div className="centered">
+      <div className="auth-brand">
+        <span className="auth-brand-mark" aria-hidden="true">💬</span>
+        {t('common.appName')}
+      </div>
       <form className="card" onSubmit={handleSubmit}>
         <div className="page-header">
           <h1>{t('login.title')}</h1>
@@ -77,6 +81,9 @@ export function LoginPage() {
         <button type="submit" disabled={loading}>
           {loading ? t('login.submitting') : t('login.submit')}
         </button>
+        <div className="divider">
+          <span>{t('common.or')}</span>
+        </div>
         <a href="/api/auth/google" className="btn-secondary button">
           {t('login.continueWithGoogle')}
         </a>

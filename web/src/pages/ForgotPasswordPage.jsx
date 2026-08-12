@@ -27,6 +27,10 @@ export function ForgotPasswordPage() {
 
   return (
     <div className="centered">
+      <div className="auth-brand">
+        <span className="auth-brand-mark" aria-hidden="true">💬</span>
+        {t('common.appName')}
+      </div>
       <form className="card" onSubmit={handleSubmit}>
         <h1>{t('forgotPassword.title')}</h1>
         <p className="hint">{t('forgotPassword.description')}</p>

@@ -238,7 +238,7 @@ export function FriendsPage() {
               </button>
               <button
                 type="button"
-                className="danger"
+                className="btn-secondary-danger"
                 disabled={busyId === f.friendshipId}
                 onClick={() => runAction(f.friendshipId, () => blockUser(f.otherUser.id))}
               >

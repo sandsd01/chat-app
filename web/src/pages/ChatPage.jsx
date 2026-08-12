@@ -310,7 +310,7 @@ export function ChatPage() {
   let lastDayKey = null
 
   return (
-    <div>
+    <div className={activeConversationId ? 'chat-page show-thread' : 'chat-page'}>
       <h1>{t('chat.title')}</h1>
 
       <div className={`chat-layout${activeConversationId ? ' show-thread' : ''}`}>
@@ -422,7 +422,7 @@ export function ChatPage() {
                 <span className="chat-thread-header-name">{threadHeaderName}</span>
               </div>
 
-              {connectionState !== 'connected' && (
+              {(connectionState === 'reconnecting' || connectionState === 'down') && (
                 <div className={`chat-stream-banner${connectionState === 'down' ? ' down' : ''}`}>
                   <span>{connectionState === 'down' ? t('chat.disconnected') : t('chat.reconnecting')}</span>
                   {connectionState === 'down' && (

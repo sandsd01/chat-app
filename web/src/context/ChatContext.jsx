@@ -17,7 +17,12 @@ export function ChatProvider({ children }) {
   const [conversations, setConversations] = useState([])
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState(null)
-  const [connectionState, setConnectionState] = useState('reconnecting')
+  // 'connecting' (first attempt, nothing to warn about yet) is distinct from
+  // 'reconnecting' (a live connection just dropped) so the UI only shows a
+  // banner once something has actually gone wrong — a brand-new page load
+  // isn't a reconnect. See connect()/scheduleReconnect() below for exactly
+  // when each fires.
+  const [connectionState, setConnectionState] = useState('connecting')
 
   const listenersRef = useRef(new Map()) // conversationId -> Set<(payload) => void>
   const friendListenersRef = useRef(new Set())
@@ -114,7 +119,10 @@ export function ChatProvider({ children }) {
 
   const connect = useCallback(async () => {
     if (stoppedRef.current) return
-    setConnectionState((s) => (s === 'connected' ? s : 'reconnecting'))
+    // attemptRef is only ever incremented by scheduleReconnect, i.e. after a
+    // real failure — so still being at 0 here means this is the first-ever
+    // attempt for this token, not a reconnect.
+    setConnectionState((s) => (s === 'connected' ? s : attemptRef.current === 0 ? 'connecting' : 'reconnecting'))
     let ticket
     try {
       ;({ ticket } = await getStreamTicket(token))
@@ -162,7 +170,7 @@ export function ChatProvider({ children }) {
 
     if (!token) {
       stoppedRef.current = true
-      setConnectionState('reconnecting')
+      setConnectionState('connecting')
       return
     }
 

@@ -29,6 +29,10 @@ export function SignupPage() {
 
   return (
     <div className="centered">
+      <div className="auth-brand">
+        <span className="auth-brand-mark" aria-hidden="true">💬</span>
+        {t('common.appName')}
+      </div>
       <form className="card" onSubmit={handleSubmit}>
         <h1>{t('signup.title')}</h1>
         {error && <p className="error">{error}</p>}
@@ -53,6 +57,9 @@ export function SignupPage() {
         <button type="submit" disabled={loading}>
           {loading ? t('signup.submitting') : t('signup.submit')}
         </button>
+        <div className="divider">
+          <span>{t('common.or')}</span>
+        </div>
         <a href="/api/auth/google" className="btn-secondary button">
           {t('login.continueWithGoogle')}
         </a>

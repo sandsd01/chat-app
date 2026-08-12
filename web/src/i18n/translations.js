@@ -7,6 +7,8 @@ export const translations = {
     'common.loading': 'Loading…',
     'common.back': '← Back',
     'common.retry': 'Retry',
+    'common.or': 'or',
+    'common.appName': 'Chat',
 
     'login.title': 'Sign in',
     'login.email': 'Email',
@@ -69,7 +71,7 @@ export const translations = {
     'account.updatePassword': 'Update password',
 
     'chat.title': 'Messages',
-    'chat.searchPlaceholder': 'Search friends or conversations',
+    'chat.searchPlaceholder': 'Search friends',
     'chat.sectionFriends': 'Friends',
     'chat.sectionConversations': 'Conversations',
     'chat.loadError': 'Could not load conversations.',
@@ -130,6 +132,8 @@ export const translations = {
     'common.loading': 'กำลังโหลด…',
     'common.back': '← กลับ',
     'common.retry': 'ลองใหม่',
+    'common.or': 'หรือ',
+    'common.appName': 'Chat',
 
     'login.title': 'เข้าสู่ระบบ',
     'login.email': 'อีเมล',
@@ -192,7 +196,7 @@ export const translations = {
     'account.updatePassword': 'อัปเดตรหัสผ่าน',
 
     'chat.title': 'ข้อความ',
-    'chat.searchPlaceholder': 'ค้นหาเพื่อนหรือบทสนทนา',
+    'chat.searchPlaceholder': 'ค้นหาเพื่อน',
     'chat.sectionFriends': 'เพื่อน',
     'chat.sectionConversations': 'บทสนทนา',
     'chat.loadError': 'โหลดบทสนทนาไม่สำเร็จ',

@@ -58,6 +58,7 @@ export function AccountPage() {
           {t('account.signedInAs')} <strong>{user?.name || user?.email}</strong>
         </p>
 
+        <hr className="section-divider" />
         <h2>{t('account.notifications')}</h2>
         {push.error && <p className="error">{push.error}</p>}
         {push.status === 'unsupported' && <p className="friends-caption">{t('account.pushUnsupported')}</p>}
@@ -76,6 +77,7 @@ export function AccountPage() {
           </>
         )}
 
+        <hr className="section-divider" />
         <h2>{t('account.driveBackup')}</h2>
         <p className="friends-caption">{t('account.driveBackupDescription')}</p>
         {driveError && <p className="error">{driveError}</p>}
@@ -111,6 +113,7 @@ export function AccountPage() {
           </>
         )}
 
+        <hr className="section-divider" />
         <h2>{t('account.changePassword')}</h2>
         {error && <p className="error">{error}</p>}
         {message && <p className="notice">{message}</p>}

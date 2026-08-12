@@ -35,6 +35,10 @@ export function ResetPasswordPage() {
   if (!email || !token) {
     return (
       <div className="centered">
+        <div className="auth-brand">
+          <span className="auth-brand-mark" aria-hidden="true">💬</span>
+          {t('common.appName')}
+        </div>
         <div className="card">
           <h1>{t('resetPassword.title')}</h1>
           <p className="error">{t('resetPassword.invalidLink')}</p>
@@ -46,6 +50,10 @@ export function ResetPasswordPage() {
 
   return (
     <div className="centered">
+      <div className="auth-brand">
+        <span className="auth-brand-mark" aria-hidden="true">💬</span>
+        {t('common.appName')}
+      </div>
       <form className="card" onSubmit={handleSubmit}>
         <h1>{t('resetPassword.title')}</h1>
         {error && <p className="error">{error}</p>}
