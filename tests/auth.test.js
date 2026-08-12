@@ -16,6 +16,30 @@ describe("Google sign-in, not configured (no GOOGLE_* env vars in this test proc
   });
 });
 
+describe("Google Drive backup, not configured (no DRIVE_*/TOKEN_ENCRYPTION_KEY in this test process)", () => {
+  test("POST /drive/connect/start 503s rather than crashing", async () => {
+    await resetDb();
+    await createUser({ email: "driveuser@test.com", password: "drivepass1" });
+    const login = await request(app)
+      .post("/api/auth/login")
+      .send({ email: "driveuser@test.com", password: "drivepass1" });
+    const res = await request(app)
+      .post("/api/drive/connect/start")
+      .set("Authorization", `Bearer ${login.body.token}`);
+    assert.equal(res.status, 503);
+  });
+
+  test("POST /drive/sync 503s rather than crashing", async () => {
+    const login = await request(app)
+      .post("/api/auth/login")
+      .send({ email: "driveuser@test.com", password: "drivepass1" });
+    const res = await request(app)
+      .post("/api/drive/sync")
+      .set("Authorization", `Bearer ${login.body.token}`);
+    assert.equal(res.status, 503);
+  });
+});
+
 describe("POST /auth/signup", () => {
   beforeEach(async () => {
     await resetDb();

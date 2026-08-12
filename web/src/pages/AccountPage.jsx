@@ -1,8 +1,17 @@
 import { useState } from 'react'
+import { useSearchParams } from 'react-router-dom'
 import { apiFetch } from '../api/client'
 import { useAuth } from '../context/AuthContext'
 import { useLanguage } from '../context/LanguageContext'
 import { usePushSubscription } from '../hooks/usePushSubscription'
+import { useDriveBackup } from '../hooks/useDriveBackup'
+
+const DRIVE_ERROR_KEYS = {
+  invalid_state: 'account.driveErrorInvalidState',
+  drive_exchange_failed: 'account.driveErrorExchange',
+  no_refresh_token: 'account.driveErrorNoRefreshToken',
+  drive_not_configured: 'account.driveErrorUnconfigured',
+}
 
 export function AccountPage() {
   const { token, user } = useAuth()
@@ -12,8 +21,13 @@ export function AccountPage() {
   const [error, setError] = useState(null)
   const [message, setMessage] = useState(null)
   const [loading, setLoading] = useState(false)
+  const [searchParams] = useSearchParams()
 
   const push = usePushSubscription(token)
+  const drive = useDriveBackup(token)
+
+  const driveErrorCode = searchParams.get('driveError')
+  const driveError = driveErrorCode ? t(DRIVE_ERROR_KEYS[driveErrorCode] || 'account.driveErrorGeneric') : null
 
   async function handleSubmit(e) {
     e.preventDefault()
@@ -58,6 +72,41 @@ export function AccountPage() {
             <p className="notice">{t('account.notificationsEnabled')}</p>
             <button type="button" className="btn-secondary" disabled={push.busy} onClick={push.unsubscribe}>
               {push.busy ? t('common.loading') : t('account.disableNotifications')}
+            </button>
+          </>
+        )}
+
+        <h2>{t('account.driveBackup')}</h2>
+        <p className="friends-caption">{t('account.driveBackupDescription')}</p>
+        {driveError && <p className="error">{driveError}</p>}
+        {drive.error && <p className="error">{drive.error}</p>}
+        {drive.status === 'connected' && (
+          <>
+            <p className="notice">
+              {t('account.driveConnectedSince', {
+                date: drive.connectedAt ? new Date(drive.connectedAt).toLocaleString() : '',
+              })}
+            </p>
+            {drive.lastSync && (
+              <p className="friends-caption">
+                {drive.lastSync.messagesArchived > 0
+                  ? t('account.driveSyncResult', { count: drive.lastSync.messagesArchived })
+                  : t('account.driveSyncResultNone')}
+              </p>
+            )}
+            <button type="button" className="btn-secondary" disabled={drive.busy} onClick={drive.sync}>
+              {drive.busy ? t('common.loading') : t('account.driveSyncNow')}
+            </button>
+            <button type="button" className="btn-secondary" disabled={drive.busy} onClick={drive.disconnect}>
+              {drive.busy ? t('common.loading') : t('account.driveDisconnect')}
+            </button>
+          </>
+        )}
+        {drive.status === 'disconnected' && (
+          <>
+            <p className="friends-caption">{t('account.driveNotConnected')}</p>
+            <button type="button" className="btn-secondary" disabled={drive.busy} onClick={drive.connect}>
+              {drive.busy ? t('common.loading') : t('account.driveConnect')}
             </button>
           </>
         )}

@@ -4,12 +4,13 @@ A standalone 1:1 direct-messaging app. You add someone as a friend by sharing yo
 account's short public ID, then message them, with messages delivered live over
 Server-Sent Events (SSE).
 
-This is phase 4: email+password accounts (self-signup) or Google sign-in, the
-add-by-ID friend system that gates who can message whom, and the app is
+This is phase 5: email+password accounts (self-signup) or Google sign-in, the
+add-by-ID friend system that gates who can message whom, the app is
 installable (PWA) with Web Push notifications for messages that arrive while
-it isn't open. Not yet built (tracked as a later phase): per-user Google
-Drive message archiving. See `CLAUDE.md` for the architectural reasoning
-behind what *is* here.
+it isn't open, and messages can be backed up to each user's own Google
+Drive, with the server pruning its own copy once both sides of a
+conversation have archived it. See `CLAUDE.md` for the architectural
+reasoning behind what's here.
 
 ## Stack
 
@@ -119,6 +120,29 @@ fallback for "not connected right now," not a mirror of every SSE event; see
 `CLAUDE.md` for the reasoning and for why friend-request notifications work
 slightly differently.
 
+### Google Drive backup
+
+| Method | Path | Auth | Description |
+|---|---|---|---|
+| GET | `/api/drive/status` | required | Whether the caller has connected Google Drive, and since when |
+| POST | `/api/drive/connect/start` | required | Returns `{ url }`, a Google consent URL to redirect the browser to; `503` if not configured |
+| GET | `/api/drive/connect/callback` | — | Google redirects the browser back here; on success redirects to `${APP_URL}/account?drive=connected`, on failure to `${APP_URL}/account?driveError=` |
+| POST | `/api/drive/disconnect` | required | Revoke and forget the stored token; clears this user's archive-tracking rows (their already-archived files in their own Drive are untouched) |
+| POST | `/api/drive/sync` | required | Archive this user's new messages to Drive right now (normally runs automatically on `DRIVE_SYNC_CRON`), returns `{ messagesArchived, filesUpdated }`; `400` if not connected |
+
+Connecting is a separate consent flow from Google sign-in (a different scope
+and a different redirect URI — see `.env.example`), because backup needs
+*offline* access (a refresh token the server can use later, unattended)
+where sign-in only ever needs an online, one-time grant. Once connected, the
+server periodically archives each new message into a JSONL file per
+conversation inside a "Chat Backups" folder in that user's own Drive, and
+deletes a message from its own database only once **every** participant of
+that conversation has archived past it — a conversation where the other
+side never connects Drive simply never gets pruned. See `CLAUDE.md` for the
+full reasoning, including what's still out of scope (there's no in-app way
+yet to read history back out of Drive once it's been pruned — it lives in
+the user's own Drive file, not in the app's UI).
+
 ## Environment variables
 
 See `.env.example` for the full list with explanations. `DATABASE_URL` and
@@ -134,6 +158,19 @@ either way. `GOOGLE_REDIRECT_URI` must match one of the OAuth client's
 "Authorized redirect URIs" in Google Cloud Console *exactly*, and while the
 consent screen is in Testing mode, only accounts explicitly added as test
 users can complete sign-in.
+
+## Google Drive backup
+
+Optional, and independent of Google sign-in above (a user can sign in with
+email+password and still connect Drive backup, or vice versa). Reuses the
+same `GOOGLE_CLIENT_ID`/`GOOGLE_CLIENT_SECRET`, but needs its own
+`DRIVE_REDIRECT_URI` registered as a separate "Authorized redirect URI" in
+Google Cloud Console, plus a `TOKEN_ENCRYPTION_KEY` (see `.env.example` for
+how to generate one) to encrypt the Drive refresh token at rest — without
+all three set, `POST /api/drive/connect/start` and `POST /api/drive/sync`
+`503` and the Account page's "Google Drive backup" section stays in its
+disconnected state. `DRIVE_SYNC_CRON` controls how often the server sweeps
+connected users' new messages into Drive (default every 15 minutes).
 
 ## PWA
 

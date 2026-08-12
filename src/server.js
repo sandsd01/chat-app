@@ -1,5 +1,7 @@
 require("dotenv/config");
+const cron = require("node-cron");
 const app = require("./app");
+const { driveConfigured, runArchiveSweep } = require("./lib/drive");
 
 const port = process.env.PORT || 3000;
 
@@ -46,3 +48,16 @@ if (PLACEHOLDER_SECRETS.has(jwtSecret) || jwtSecret.length < 32) {
 app.listen(port, () => {
   console.log(`API listening on port ${port}`);
 });
+
+// Archives each Drive-connected user's new messages to their own Drive, then
+// prunes any message every one of its conversation's participants has now
+// archived — see src/lib/drive.js. Runs server-side on a schedule (not
+// client-triggered) so archiving still happens for a user who isn't online;
+// no-ops entirely when Drive backup isn't configured, matching the
+// optional-service pattern used for email/push elsewhere in this app.
+if (driveConfigured) {
+  const schedule = process.env.DRIVE_SYNC_CRON || "*/15 * * * *";
+  cron.schedule(schedule, () => {
+    runArchiveSweep().catch((err) => console.error("Drive archive sweep failed:", err));
+  });
+}

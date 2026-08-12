@@ -10,6 +10,7 @@ const userRoutes = require("./routes/users");
 const chatRoutes = require("./routes/chat");
 const { router: friendRoutes } = require("./routes/friends");
 const pushRoutes = require("./routes/push");
+const { router: driveRoutes } = require("./routes/drive");
 const { apiLimiter } = require("./middleware/rateLimit");
 
 const app = express();
@@ -78,6 +79,7 @@ apiRouter.use("/users", userRoutes);
 apiRouter.use("/chat", chatRoutes);
 apiRouter.use("/friends", friendRoutes);
 apiRouter.use("/push", pushRoutes);
+apiRouter.use("/drive", driveRoutes);
 
 // The API is namespaced under /api so the SPA can own the rest of the URL
 // space: a client route such as /chat/42 would otherwise resolve to the API
