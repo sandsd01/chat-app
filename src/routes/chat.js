@@ -1,0 +1,288 @@
+const crypto = require("crypto");
+const express = require("express");
+const prisma = require("../../prisma/client");
+const { authenticate } = require("../middleware/auth");
+const chatBus = require("../lib/chatBus");
+
+const router = express.Router();
+
+const PUBLIC_USER_SELECT = { id: true, name: true, email: true };
+
+// --- SSE stream tickets --------------------------------------------------
+// EventSource can't set an Authorization header, so GET /stream can't go
+// through the normal JWT middleware. Instead an authenticated client first
+// calls POST /stream-ticket to mint a short-lived, single-use ticket, then
+// opens the EventSource against /stream?ticket=... . Tickets live only in
+// this process's memory (fine for a single-container deploy, same caveat as
+// chatBus) and are deleted the moment they're consumed or expire.
+const TICKET_TTL_MS = 30 * 1000;
+const tickets = new Map(); // ticket -> { userId, expiresAt }
+
+function issueTicket(userId) {
+  const ticket = crypto.randomBytes(24).toString("hex");
+  const expiresAt = Date.now() + TICKET_TTL_MS;
+  tickets.set(ticket, { userId, expiresAt });
+  const timer = setTimeout(() => tickets.delete(ticket), TICKET_TTL_MS);
+  timer.unref?.();
+  return ticket;
+}
+
+/** Single-use: returns the associated userId and removes the ticket, or null. */
+function consumeTicket(ticket) {
+  const entry = tickets.get(ticket);
+  if (!entry) return null;
+  tickets.delete(ticket);
+  if (entry.expiresAt < Date.now()) return null;
+  return entry.userId;
+}
+
+// Must be registered before router.use(authenticate) below so a request for
+// this exact path never hits the JWT check — it authenticates itself via the
+// ticket instead.
+router.get("/stream", (req, res) => {
+  const ticket = typeof req.query.ticket === "string" ? req.query.ticket : "";
+  const userId = ticket ? consumeTicket(ticket) : null;
+  if (!userId) {
+    return res.status(401).json({ error: "Invalid or expired ticket" });
+  }
+
+  res.status(200);
+  res.setHeader("Content-Type", "text/event-stream");
+  res.setHeader("Cache-Control", "no-cache");
+  res.setHeader("Connection", "keep-alive");
+  // Disables buffering on nginx-style proxies (e.g. in front of Render/etc.)
+  // that would otherwise hold the stream open with nothing flushed to the client.
+  res.setHeader("X-Accel-Buffering", "no");
+  res.flushHeaders?.();
+
+  const heartbeat = setInterval(() => {
+    res.write(": ping\n\n");
+  }, 25000);
+
+  const unsubscribe = chatBus.subscribe(userId, (event, payload) => {
+    res.write(`event: ${event}\ndata: ${JSON.stringify(payload)}\n\n`);
+  });
+
+  req.on("close", () => {
+    clearInterval(heartbeat);
+    unsubscribe();
+  });
+});
+
+router.use(authenticate);
+
+// --- User search ----------------------------------------------------------
+
+router.get("/users", async (req, res) => {
+  const q = typeof req.query.q === "string" ? req.query.q.trim() : "";
+  if (!q) return res.json([]);
+
+  const users = await prisma.user.findMany({
+    where: {
+      id: { not: req.user.id },
+      OR: [{ name: { contains: q, mode: "insensitive" } }, { email: { contains: q, mode: "insensitive" } }],
+    },
+    select: PUBLIC_USER_SELECT,
+    take: 20,
+    orderBy: { email: "asc" },
+  });
+
+  res.json(users);
+});
+
+// --- Conversations ----------------------------------------------------------
+
+async function getConversationForParticipant(conversationId, userId) {
+  if (!Number.isInteger(conversationId)) return null;
+  const conversation = await prisma.conversation.findUnique({ where: { id: conversationId } });
+  if (!conversation) return null;
+  if (conversation.userAId !== userId && conversation.userBId !== userId) return null;
+  return conversation;
+}
+
+function conversationSummary(conversation, meId) {
+  const isUserA = conversation.userAId === meId;
+  const otherUser = isUserA ? conversation.userB : conversation.userA;
+  return {
+    id: conversation.id,
+    otherUser,
+    lastMessageAt: conversation.lastMessageAt,
+    createdAt: conversation.createdAt,
+  };
+}
+
+router.get("/conversations", async (req, res) => {
+  const meId = req.user.id;
+
+  const conversations = await prisma.conversation.findMany({
+    where: { OR: [{ userAId: meId }, { userBId: meId }] },
+    include: {
+      userA: { select: PUBLIC_USER_SELECT },
+      userB: { select: PUBLIC_USER_SELECT },
+      messages: { orderBy: { createdAt: "desc" }, take: 1 },
+    },
+  });
+
+  // lastMessageAt is only set once a conversation has a message; falling back
+  // to createdAt keeps a brand-new, still-empty conversation from sorting as
+  // if it were older than everything (it would otherwise compare as null).
+  conversations.sort((a, b) => {
+    const aTime = (a.lastMessageAt ?? a.createdAt).getTime();
+    const bTime = (b.lastMessageAt ?? b.createdAt).getTime();
+    return bTime - aTime;
+  });
+
+  const data = await Promise.all(
+    conversations.map(async (c) => {
+      const isUserA = c.userAId === meId;
+      const myLastReadAt = isUserA ? c.userALastReadAt : c.userBLastReadAt;
+      const unreadCount = await prisma.message.count({
+        where: {
+          conversationId: c.id,
+          senderId: { not: meId },
+          // A null last-read means "unread since the beginning" — every
+          // message from the other participant still counts.
+          ...(myLastReadAt ? { createdAt: { gt: myLastReadAt } } : {}),
+        },
+      });
+
+      return {
+        ...conversationSummary(c, meId),
+        lastMessage: c.messages[0] || null,
+        unreadCount,
+      };
+    })
+  );
+
+  res.json(data);
+});
+
+router.post("/conversations", async (req, res) => {
+  const meId = req.user.id;
+  const targetId = Number(req.body?.userId);
+
+  if (!Number.isInteger(targetId)) {
+    return res.status(400).json({ error: "userId is required" });
+  }
+  if (targetId === meId) {
+    return res.status(400).json({ error: "Cannot start a conversation with yourself" });
+  }
+
+  const target = await prisma.user.findUnique({ where: { id: targetId } });
+  if (!target) return res.status(404).json({ error: "User not found" });
+
+  // Canonicalise the pair so the unique index gives us an idempotent
+  // find-or-create with no separate participants table to reason about.
+  const userAId = Math.min(meId, targetId);
+  const userBId = Math.max(meId, targetId);
+
+  const include = { userA: { select: PUBLIC_USER_SELECT }, userB: { select: PUBLIC_USER_SELECT } };
+
+  const existing = await prisma.conversation.findUnique({
+    where: { userAId_userBId: { userAId, userBId } },
+    include,
+  });
+  if (existing) {
+    return res.status(200).json(conversationSummary(existing, meId));
+  }
+
+  const created = await prisma.conversation.create({ data: { userAId, userBId }, include });
+  res.status(201).json(conversationSummary(created, meId));
+});
+
+router.get("/conversations/:id/messages", async (req, res) => {
+  const conversationId = Number(req.params.id);
+  const conversation = await getConversationForParticipant(conversationId, req.user.id);
+  if (!conversation) return res.status(404).json({ error: "Conversation not found" });
+
+  const limit = Math.min(100, Math.max(1, Number.parseInt(req.query.limit, 10) || 50));
+
+  let before;
+  if (req.query.before !== undefined && req.query.before !== "") {
+    before = Number(req.query.before);
+    if (!Number.isInteger(before)) {
+      return res.status(400).json({ error: "before must be a message id" });
+    }
+  }
+
+  // Newest-first, walking backward on scroll-up: fetch one extra row so we
+  // can tell whether there's more without a separate count query.
+  const rows = await prisma.message.findMany({
+    where: {
+      conversationId,
+      ...(before !== undefined ? { id: { lt: before } } : {}),
+    },
+    orderBy: [{ createdAt: "desc" }, { id: "desc" }],
+    take: limit + 1,
+  });
+
+  const hasMore = rows.length > limit;
+  const data = rows.slice(0, limit);
+
+  res.json({ data, hasMore, nextBefore: hasMore ? data[data.length - 1].id : null });
+});
+
+router.post("/conversations/:id/messages", async (req, res) => {
+  const conversationId = Number(req.params.id);
+  const conversation = await getConversationForParticipant(conversationId, req.user.id);
+  if (!conversation) return res.status(404).json({ error: "Conversation not found" });
+
+  const body = typeof req.body?.body === "string" ? req.body.body.trim() : "";
+  if (!body) {
+    return res.status(400).json({ error: "body is required" });
+  }
+  if (body.length > 4000) {
+    return res.status(400).json({ error: "body must be 4000 characters or fewer" });
+  }
+
+  const message = await prisma.$transaction(async (tx) => {
+    const created = await tx.message.create({
+      data: { conversationId, senderId: req.user.id, body },
+    });
+    await tx.conversation.update({
+      where: { id: conversationId },
+      data: { lastMessageAt: created.createdAt },
+    });
+    return created;
+  });
+
+  const payload = {
+    id: message.id,
+    conversationId: message.conversationId,
+    senderId: message.senderId,
+    body: message.body,
+    createdAt: message.createdAt,
+  };
+
+  // Deliberately not logged via src/lib/audit.js — message content doesn't
+  // belong in an audit trail.
+  chatBus.publish(conversation.userAId, "message", payload);
+  chatBus.publish(conversation.userBId, "message", payload);
+
+  res.status(201).json(payload);
+});
+
+router.post("/conversations/:id/read", async (req, res) => {
+  const conversationId = Number(req.params.id);
+  const conversation = await getConversationForParticipant(conversationId, req.user.id);
+  if (!conversation) return res.status(404).json({ error: "Conversation not found" });
+
+  const isUserA = conversation.userAId === req.user.id;
+  const now = new Date();
+  const updated = await prisma.conversation.update({
+    where: { id: conversationId },
+    data: isUserA ? { userALastReadAt: now } : { userBLastReadAt: now },
+  });
+
+  res.json({
+    conversationId: updated.id,
+    lastReadAt: isUserA ? updated.userALastReadAt : updated.userBLastReadAt,
+  });
+});
+
+router.post("/stream-ticket", (req, res) => {
+  const ticket = issueTicket(req.user.id);
+  res.json({ ticket });
+});
+
+module.exports = router;

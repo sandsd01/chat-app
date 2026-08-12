@@ -1,0 +1,894 @@
+:root {
+  --text: #1c1b22;
+  --text-muted: #57525f;
+  --bg: #fff;
+  --bg-subtle: #f5f4f8;
+  --bg-raised: #fff;
+  --border: #d9d7de;
+  --border-strong: #b9b6c2;
+  --accent: #6d28d9;
+  --accent-hover: #5b21b6;
+  --accent-soft: #f2ecfd;
+  --danger: #b3261e;
+  --danger-bg: #fdeceb;
+  --ok: #17643f;
+  --ok-bg: #e6f4ec;
+  --warn-bg: #fdf1dc;
+  --ring: #6d28d9;
+
+  /* Text painted on a solid --accent or --danger fill (buttons, chat
+     bubbles, unread badges, the active nav pill). White works while those
+     are the light-mode's saturated purple/red, but dark mode turns both
+     pale (lavender / salmon) — white-on-pale drops to ~2:1. Fixed here
+     instead of every filled surface hardcoding #fff. */
+  --accent-contrast: #fff;
+
+  /* Every control is at least this tall — a comfortable tap target on
+     mobile, and 36px targets get mis-hit. */
+  --tap: 46px;
+  --radius: 10px;
+
+  font: 17px/1.55 system-ui, 'Segoe UI', Roboto, sans-serif;
+  color-scheme: light dark;
+  color: var(--text);
+  background: var(--bg);
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --text: #edecf1;
+    --text-muted: #a8a3b3;
+    --bg: #15161c;
+    --bg-subtle: #1e1f27;
+    --bg-raised: #24252f;
+    --border: #34363f;
+    --border-strong: #4a4c58;
+    --accent: #c4a2fd;
+    --accent-hover: #d3bafe;
+    --accent-soft: #2a2140;
+    --danger: #ff9d95;
+    --danger-bg: #3d1f1d;
+    --ok: #7fdcab;
+    --ok-bg: #14301f;
+    --warn-bg: #3a2f16;
+    --ring: #c4a2fd;
+
+    --accent-contrast: #15161c;
+  }
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+}
+
+h1 {
+  font-size: 28px;
+  margin: 0 0 16px;
+}
+
+h2 {
+  font-size: 18px;
+  margin: 0 0 12px;
+}
+
+a {
+  color: var(--accent);
+}
+
+.layout {
+  min-height: 100svh;
+  display: flex;
+  flex-direction: column;
+}
+
+.navbar {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  padding: 12px 24px;
+  border-bottom: 1px solid var(--border);
+}
+
+.navbar a {
+  text-decoration: none;
+  font-weight: 500;
+}
+
+.navbar .spacer {
+  flex: 1;
+}
+
+.user-badge {
+  color: var(--text-muted);
+  font-size: 14px;
+}
+
+.content {
+  padding: 24px;
+  max-width: 960px;
+  width: 100%;
+  margin: 0 auto;
+}
+
+.page-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 16px;
+}
+
+.centered {
+  display: flex;
+  justify-content: center;
+  padding-top: 48px;
+}
+
+.card {
+  background: var(--bg-subtle);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 24px;
+  width: 100%;
+  max-width: 400px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.inline-form {
+  max-width: none;
+  margin-bottom: 24px;
+}
+
+label {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 14px;
+  text-align: left;
+}
+
+input,
+select,
+button,
+textarea {
+  font: inherit;
+  min-height: var(--tap);
+  padding: 10px 14px;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius);
+  background: var(--bg);
+  color: var(--text);
+}
+
+input:hover,
+select:hover {
+  border-color: var(--accent);
+}
+
+/* One visible focus treatment for every control, so keyboard and switch users
+   can always tell where they are. */
+:where(input, select, button, textarea, a):focus-visible {
+  outline: 3px solid var(--ring);
+  outline-offset: 2px;
+  border-radius: var(--radius);
+}
+
+button {
+  cursor: pointer;
+  background: var(--accent);
+  color: var(--accent-contrast);
+  border: 1px solid var(--accent);
+  font-weight: 600;
+  letter-spacing: 0.01em;
+  transition: background-color 0.12s ease, transform 0.06s ease;
+}
+
+button:hover:not(:disabled) {
+  background: var(--accent-hover);
+  border-color: var(--accent-hover);
+}
+
+button:active:not(:disabled) {
+  transform: translateY(1px);
+}
+
+button:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  * {
+    transition: none !important;
+    animation: none !important;
+  }
+}
+
+.button {
+  display: inline-block;
+  padding: 8px 14px;
+  background: var(--accent);
+  color: var(--accent-contrast);
+  border-radius: 6px;
+  text-decoration: none;
+  font-weight: 500;
+}
+
+.error {
+  color: var(--danger);
+  background: var(--danger-bg);
+  padding: 8px 12px;
+  border-radius: 6px;
+  font-size: 14px;
+}
+
+.table {
+  width: 100%;
+  border-collapse: collapse;
+}
+
+.table th,
+.table td {
+  text-align: left;
+  padding: 8px 12px;
+  border-bottom: 1px solid var(--border);
+}
+
+.search-input {
+  width: 100%;
+  max-width: 320px;
+}
+
+.notice {
+  color: var(--accent);
+  background: var(--bg-subtle);
+  border: 1px solid var(--border);
+  padding: 8px 12px;
+  border-radius: 6px;
+  font-size: 14px;
+  margin-bottom: 16px;
+}
+
+.language-select {
+  padding: 4px 6px;
+  font-size: 13px;
+}
+
+.hint {
+  font-size: 13px;
+  color: var(--text-muted);
+}
+
+/* ---- Clarity pass -------------------------------------------------------
+   The primary action has to be unmistakable, and every row/label needs
+   enough contrast and size to be scanned quickly rather than read carefully. */
+
+/* Secondary actions read as secondary instead of competing with the primary one. */
+.btn-secondary,
+button.secondary {
+  background: var(--bg);
+  color: var(--accent);
+  border: 1px solid var(--border-strong);
+}
+
+.btn-secondary:hover:not(:disabled),
+button.secondary:hover:not(:disabled) {
+  background: var(--accent-soft);
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+/* Destructive actions must never be a one-tap mistake in an unlabelled colour. */
+button.danger {
+  background: var(--danger);
+  border-color: var(--danger);
+  color: var(--accent-contrast);
+}
+
+/* Labels were 14px and easy to skip past when filling a form in a hurry. */
+label {
+  font-size: 15px;
+  font-weight: 550;
+  gap: 6px;
+  margin-bottom: 4px;
+}
+
+/* Tables are scanned, not read: roomier rows, a header that reads as a header,
+   and a hover cue so the eye can track across a wide row. */
+table {
+  width: 100%;
+  border-collapse: collapse;
+}
+
+th {
+  font-size: 13px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--text-muted);
+  font-weight: 700;
+  border-bottom: 2px solid var(--border-strong);
+  padding: 12px 10px;
+  text-align: left;
+}
+
+td {
+  padding: 14px 10px;
+  border-bottom: 1px solid var(--border);
+  vertical-align: middle;
+}
+
+tbody tr:hover {
+  background: var(--bg-subtle);
+}
+
+/* Money/counters (if any future screen needs them) line up in columns. */
+td:has(+ td) {
+  font-variant-numeric: tabular-nums;
+}
+
+/* Nav: show where you are, and give links a real hit area. Scrolls sideways
+   rather than wrapping — a wrapped nav pushes items onto their own line and
+   shifts the whole page down. */
+.navbar {
+  gap: 2px;
+  padding: 8px 16px;
+  flex-wrap: nowrap;
+  overflow-x: auto;
+  scrollbar-width: thin;
+}
+
+.navbar > * {
+  flex: none;
+}
+
+.navbar a {
+  padding: 9px 11px;
+  border-radius: 8px;
+  color: var(--text);
+  line-height: 1.2;
+  font-size: 15.5px;
+  white-space: nowrap;
+}
+
+.navbar button {
+  min-height: 40px;
+  padding: 8px 14px;
+  white-space: nowrap;
+}
+
+.navbar select {
+  min-height: 40px;
+  padding: 6px 8px;
+}
+
+.navbar a:hover {
+  background: var(--accent-soft);
+  color: var(--accent);
+}
+
+.navbar a.active {
+  background: var(--accent);
+  color: var(--accent-contrast);
+  font-weight: 650;
+}
+
+/* Feedback messages need to be noticed, not blend into the page. */
+.error,
+.notice,
+.hint {
+  border-radius: var(--radius);
+  padding: 12px 14px;
+  font-size: 15px;
+  line-height: 1.5;
+}
+
+.error {
+  background: var(--danger-bg);
+  color: var(--danger);
+  border: 1px solid currentColor;
+  font-weight: 600;
+}
+
+.notice {
+  background: var(--ok-bg);
+  color: var(--ok);
+  border: 1px solid currentColor;
+  font-weight: 600;
+}
+
+.hint {
+  background: var(--bg-subtle);
+  color: var(--text-muted);
+  border: 1px solid var(--border);
+}
+
+.centered .card {
+  max-width: 460px;
+  background: var(--bg-raised);
+  gap: 4px;
+}
+
+.centered .card p {
+  margin: 0;
+  padding: 7px 0;
+  color: var(--text-muted);
+  font-size: 15px;
+}
+
+.centered .card p strong {
+  color: var(--text);
+  font-size: 17px;
+}
+
+.centered .card h1 {
+  margin-bottom: 8px;
+}
+
+/* Forms and cards get room to breathe on small screens too. */
+@media (max-width: 640px) {
+  .content {
+    padding: 16px;
+  }
+}
+
+/* ---- Chat (1:1 direct messages) -----------------------------------------
+   A back-office screen checked between POS tasks, sometimes on a phone: list
+   pane + thread pane side by side above 780px — the same width pos-layout
+   already collapses at, since both are "two working columns that stop
+   fitting their comfortable minimums." Below it, one pane at a time with a
+   route-driven back button standing in for the second column. */
+
+.chat-layout {
+  display: flex;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  overflow: hidden;
+  height: min(720px, 78vh);
+  min-height: 480px;
+  background: var(--bg);
+}
+
+.chat-list-pane {
+  flex: 0 0 320px;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  border-right: 1px solid var(--border);
+  background: var(--bg-raised);
+}
+
+.chat-thread-pane {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+/* -- List pane: search-to-start, then the conversation list -- */
+
+.chat-search-wrap {
+  flex-shrink: 0;
+  padding: 12px;
+  border-bottom: 1px solid var(--border);
+}
+
+.chat-search-wrap .search-input {
+  max-width: none;
+}
+
+.chat-list-scroll {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+}
+
+.chat-list-section-label {
+  padding: 10px 16px 4px;
+  font-size: 12px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--text-muted);
+  font-weight: 700;
+}
+
+.chat-conversation-row,
+.chat-user-result {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  width: 100%;
+  min-height: 64px;
+  padding: 10px 16px;
+  border: none;
+  border-bottom: 1px solid var(--border);
+  border-left: 4px solid transparent;
+  border-radius: 0;
+  background: none;
+  color: var(--text);
+  font-weight: normal;
+  text-align: left;
+  text-decoration: none;
+}
+
+.chat-conversation-row:hover:not(:disabled),
+.chat-user-result:hover:not(:disabled) {
+  background: var(--bg-subtle);
+}
+
+/* Selected state carries a left rail plus a tint, not colour alone — the
+   same pairing the payment-method ring uses in the POS. */
+.chat-conversation-row.active {
+  background: var(--accent-soft);
+  border-left-color: var(--accent);
+}
+
+.chat-avatar {
+  flex-shrink: 0;
+  width: 44px;
+  height: 44px;
+  border-radius: 50%;
+  background: var(--accent-soft);
+  color: var(--accent);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-weight: 700;
+  font-size: 16px;
+}
+
+.chat-avatar.sm {
+  width: 36px;
+  height: 36px;
+  font-size: 14px;
+}
+
+.chat-conversation-main {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.chat-conversation-name {
+  font-weight: 600;
+  font-size: 15px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Unread is carried by weight, not just the badge's colour. */
+.chat-conversation-name.unread {
+  font-weight: 750;
+}
+
+.chat-conversation-preview {
+  font-size: 14px;
+  color: var(--text-muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.chat-conversation-preview.unread {
+  color: var(--text);
+  font-weight: 600;
+}
+
+.chat-user-result-sub {
+  flex-shrink: 0;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--accent);
+}
+
+.chat-conversation-meta {
+  flex-shrink: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 6px;
+}
+
+.chat-timestamp {
+  font-size: 12px;
+  color: var(--text-muted);
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
+
+.chat-unread-badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 20px;
+  height: 20px;
+  padding: 0 6px;
+  border-radius: 999px;
+  background: var(--accent);
+  color: var(--accent-contrast);
+  font-size: 12px;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+}
+
+/* Nav gets the same badge, smaller, and inverted when the link itself is
+   already an accent-filled active pill so the badge doesn't disappear into
+   its own background. */
+.chat-nav-badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 18px;
+  height: 18px;
+  padding: 0 5px;
+  margin-left: 6px;
+  border-radius: 999px;
+  background: var(--accent);
+  color: var(--accent-contrast);
+  font-size: 11px;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+}
+
+.navbar a.active .chat-nav-badge {
+  background: var(--accent-contrast);
+  color: var(--accent);
+}
+
+.chat-empty,
+.chat-thread-placeholder {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  padding: 32px 20px;
+  text-align: center;
+  color: var(--text-muted);
+  font-size: 15px;
+}
+
+.chat-empty strong,
+.chat-thread-placeholder strong {
+  color: var(--text);
+  font-size: 16px;
+  font-weight: 650;
+}
+
+/* -- Thread pane -- */
+
+.chat-thread-header {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 16px;
+  min-height: 60px;
+  border-bottom: 1px solid var(--border);
+  background: var(--bg-raised);
+}
+
+/* Stands in for the list pane below 780px; desktop never shows it because
+   the list is already visible alongside the thread. */
+.chat-thread-back {
+  display: none;
+  flex-shrink: 0;
+  min-width: var(--tap);
+  min-height: var(--tap);
+  padding: 0 10px;
+  align-items: center;
+  justify-content: center;
+  background: var(--bg);
+  color: var(--text);
+  border: 1px solid var(--border-strong);
+}
+
+.chat-thread-header-name {
+  font-weight: 650;
+  font-size: 16px;
+}
+
+.chat-stream-banner {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 8px 16px;
+  font-size: 13px;
+  border-bottom: 1px solid var(--border);
+  background: var(--bg-subtle);
+  color: var(--text-muted);
+}
+
+/* Reconnecting is transient and expected; only escalate to the danger
+   palette once retries are exhausted and the user needs to act. */
+.chat-stream-banner.down {
+  background: var(--danger-bg);
+  color: var(--danger);
+  font-weight: 600;
+}
+
+.chat-stream-banner button {
+  margin-left: auto;
+  min-height: 36px;
+  padding: 4px 12px;
+  font-size: 13px;
+}
+
+.chat-messages {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  padding: 16px;
+  overscroll-behavior: contain;
+}
+
+.chat-load-more {
+  align-self: center;
+  padding: 8px 14px;
+  margin-bottom: 8px;
+  font-size: 13px;
+  color: var(--text-muted);
+}
+
+.chat-date-separator {
+  display: flex;
+  justify-content: center;
+  margin: 14px 0 10px;
+}
+
+.chat-date-separator span {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-muted);
+  background: var(--bg-subtle);
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  padding: 3px 14px;
+}
+
+.chat-bubble-row {
+  display: flex;
+  width: 100%;
+  margin: 3px 0;
+}
+
+.chat-bubble-row.mine {
+  justify-content: flex-end;
+}
+
+.chat-bubble-row.theirs {
+  justify-content: flex-start;
+}
+
+.chat-bubble {
+  max-width: min(72%, 480px);
+  padding: 10px 14px;
+  border-radius: 16px;
+  font-size: 15px;
+  line-height: 1.5;
+  word-break: break-word;
+  white-space: pre-wrap;
+}
+
+/* Alignment (mine = right, theirs = left) is the primary cue that never
+   depends on colour; the fill below only reinforces it. */
+.chat-bubble-row.mine .chat-bubble {
+  background: var(--accent);
+  color: var(--accent-contrast);
+  border-bottom-right-radius: 4px;
+}
+
+.chat-bubble-row.theirs .chat-bubble {
+  background: var(--bg-subtle);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-bottom-left-radius: 4px;
+}
+
+.chat-bubble-time {
+  display: block;
+  margin-top: 4px;
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+  color: var(--text-muted);
+}
+
+.chat-bubble-row.mine .chat-bubble-time {
+  color: var(--accent-contrast);
+  opacity: 0.75;
+}
+
+/* A failed send stays visible in the thread rather than vanishing — the
+   outline and the retry text both carry the failure, since the bubble
+   underneath is still solid accent-coloured. */
+.chat-bubble-row.failed .chat-bubble {
+  outline: 2px solid var(--danger);
+  outline-offset: 2px;
+}
+
+.chat-bubble-error {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  margin-top: 2px;
+  font-size: 12px;
+  color: var(--danger);
+}
+
+.chat-retry-btn {
+  min-height: var(--tap);
+  padding: 4px 8px;
+  background: none;
+  border: none;
+  color: var(--danger);
+  font-weight: 600;
+  text-decoration: underline;
+}
+
+.chat-retry-btn:hover:not(:disabled) {
+  background: var(--danger-bg);
+}
+
+.chat-composer {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 12px 16px;
+  border-top: 1px solid var(--border);
+  background: var(--bg-raised);
+}
+
+.chat-composer input {
+  flex: 1;
+  min-width: 0;
+}
+
+.chat-composer button {
+  flex-shrink: 0;
+  min-width: 88px;
+}
+
+@media (max-width: 780px) {
+  .chat-layout {
+    height: calc(100svh - 200px);
+    min-height: 420px;
+    border-radius: 0;
+    border-left: none;
+    border-right: none;
+  }
+
+  .chat-list-pane {
+    flex: 1 1 auto;
+    border-right: none;
+  }
+
+  /* One pane at a time: the page adds .show-thread to the layout once a
+     conversation is open (route /chat/:id vs /chat). */
+  .chat-layout:not(.show-thread) .chat-thread-pane {
+    display: none;
+  }
+
+  .chat-layout.show-thread .chat-list-pane {
+    display: none;
+  }
+
+  .chat-thread-back {
+    display: inline-flex;
+  }
+
+  .chat-bubble {
+    max-width: 84%;
+  }
+}

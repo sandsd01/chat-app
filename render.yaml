@@ -1,0 +1,66 @@
+# Render Blueprint — https://render.com/docs/blueprint-spec
+#
+# Deploy with: Render dashboard -> New -> Blueprint -> pick this repo.
+# Render reads this file and creates the service already configured, so the
+# only thing left to fill in by hand is DATABASE_URL (see `sync: false` below).
+#
+# ---------------------------------------------------------------------------
+# SINGLE INSTANCE ONLY — do not scale this service horizontally.
+# ---------------------------------------------------------------------------
+# Real-time chat depends on every request reaching the same Node process:
+#   * src/lib/chatBus.js fans messages out over an in-process EventEmitter,
+#     not a broker. A message POSTed to instance A never reaches a browser
+#     whose SSE stream (GET /api/chat/stream) is held open on instance B.
+#   * src/routes/chat.js keeps SSE tickets in a plain in-memory Map, so a
+#     ticket minted by A is rejected as invalid by B.
+# Neither failure is loud: nothing errors, users just silently stop receiving
+# messages. Before running more than one instance, move fan-out to a shared
+# broker (e.g. Redis pub/sub) and make the tickets shared or stateless.
+#
+# What actually pins this to one process today:
+#   * `plan: free` — Render's free instance type runs a single instance and
+#     cannot autoscale.
+#   * The Dockerfile's CMD starts one `node src/server.js`; there is no
+#     cluster/PM2 multi-worker mode.
+# If this service moves to a paid plan, uncomment `numInstances: 1` below and
+# do NOT add a `scaling:` (autoscaling) block — either one breaks chat. The
+# key is left commented out rather than set because scaling knobs aren't
+# supported on free instance types and an unsupported key risks the blueprint
+# being rejected at deploy time; the comment is the contract until then.
+#
+# Long-lived connections: the SSE response never ends, and the route writes a
+# `: ping` heartbeat every 25s to keep proxies from treating it as idle. The
+# free instance type also spins down after a stretch with no traffic, which
+# drops any open stream — the client (web/src/context/ChatContext.jsx) mints a
+# fresh ticket and reconnects with backoff, so that self-heals.
+services:
+  - type: web
+    name: chat-app
+    runtime: docker
+    dockerfilePath: ./Dockerfile
+    plan: free
+    # Must stay 1 — see the SINGLE INSTANCE ONLY note above. Uncomment only
+    # once the service is on a paid plan AND chat fan-out no longer relies on
+    # a single process.
+    # numInstances: 1
+    region: singapore
+    # Plain GET that returns JSON immediately; unrelated to and unaffected by
+    # the long-lived /api/chat/stream response.
+    healthCheckPath: /health
+    envVars:
+      # Not in this file on purpose: the connection string carries the database
+      # password, and a Blueprint is committed to the repository. Render prompts
+      # for it once at create time and stores it with the service.
+      - key: DATABASE_URL
+        sync: false
+      # Render generates a random 256-bit value; the server refuses to boot on
+      # anything under 32 characters, so don't replace this with a short one.
+      - key: JWT_SECRET
+        generateValue: true
+      - key: NODE_ENV
+        value: production
+      # Render terminates TLS in front of the container. Without this, every
+      # client looks like the proxy and express-rate-limit buckets them all
+      # together; with it, rate limits see the real caller.
+      - key: TRUST_PROXY
+        value: "1"
