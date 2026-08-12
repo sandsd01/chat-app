@@ -26,14 +26,34 @@ model User {
   resetTokenExpiresAt DateTime?
   createdAt           DateTime  @default(now())
 
-  conversationsAsUserA Conversation[] @relation("ConversationUserA")
-  conversationsAsUserB Conversation[] @relation("ConversationUserB")
-  sentMessages         Message[]      @relation("MessageSender")
-  friendshipsAsUserA   Friendship[]   @relation("FriendshipUserA")
-  friendshipsAsUserB   Friendship[]   @relation("FriendshipUserB")
-  sentFriendRequests   Friendship[]   @relation("FriendshipRequestedBy")
+  conversationsAsUserA Conversation[]     @relation("ConversationUserA")
+  conversationsAsUserB Conversation[]     @relation("ConversationUserB")
+  sentMessages         Message[]          @relation("MessageSender")
+  friendshipsAsUserA   Friendship[]       @relation("FriendshipUserA")
+  friendshipsAsUserB   Friendship[]       @relation("FriendshipUserB")
+  sentFriendRequests   Friendship[]       @relation("FriendshipRequestedBy")
+  pushSubscriptions    PushSubscription[]
 
   @@map("users")
+}
+
+/// One browser/device's Web Push registration. A user can have several (one
+/// per browser they enabled notifications in); `endpoint` is the browser
+/// push service's per-registration URL and is globally unique on its own —
+/// two different users can never legitimately share one. A subscription the
+/// push service reports as gone (404/410 on send) is deleted rather than
+/// retried, since that status means the browser itself revoked it.
+model PushSubscription {
+  id        Int      @id @default(autoincrement())
+  userId    Int
+  endpoint  String   @unique @db.Text
+  p256dh    String
+  authKey   String
+  createdAt DateTime @default(now())
+
+  user User @relation(fields: [userId], references: [id])
+
+  @@map("push_subscriptions")
 }
 
 enum FriendshipStatus {

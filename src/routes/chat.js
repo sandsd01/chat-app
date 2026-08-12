@@ -4,6 +4,7 @@ const prisma = require("../../prisma/client");
 const { authenticate } = require("../middleware/auth");
 const chatBus = require("../lib/chatBus");
 const { areFriends } = require("./friends");
+const { sendPushToUser } = require("../lib/push");
 
 const router = express.Router();
 
@@ -259,6 +260,25 @@ router.post("/conversations/:id/messages", async (req, res) => {
   // belong in an audit trail.
   chatBus.publish(conversation.userAId, "message", payload);
   chatBus.publish(conversation.userBId, "message", payload);
+
+  // Push is the fallback for "not connected," not a duplicate of the SSE
+  // event — skip it entirely when the recipient already has a live stream
+  // open, both to avoid a redundant OS notification and to avoid the extra
+  // sender-name lookup on the (much more common) both-online path. Fired
+  // without awaiting: a slow or failing push must never delay the response
+  // the sender is waiting on.
+  if (!chatBus.hasSubscribers(otherUserId)) {
+    prisma.user
+      .findUnique({ where: { id: req.user.id }, select: { name: true, email: true } })
+      .then((sender) =>
+        sendPushToUser(otherUserId, {
+          title: sender?.name || sender?.email || "New message",
+          body: body.length > 120 ? `${body.slice(0, 117)}…` : body,
+          conversationId,
+        })
+      )
+      .catch((err) => console.error("Push notification failed:", err));
+  }
 
   res.status(201).json(payload);
 });

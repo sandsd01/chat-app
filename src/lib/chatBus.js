@@ -33,4 +33,18 @@ function subscribe(userId, fn) {
   return () => emitter.off(channel, fn);
 }
 
-module.exports = { publish, subscribe };
+/**
+ * True if `userId` has at least one open SSE stream on this process right
+ * now. Used to decide whether a new message needs a push notification —
+ * there's no point pushing to someone whose client is already going to
+ * receive the same event over the live connection a moment later. Because
+ * this only sees subscribers on the current process, it's subject to the
+ * same single-instance caveat as the rest of this file: on more than one
+ * instance a user connected to a different process would look "not
+ * connected" here and get a push they didn't need.
+ */
+function hasSubscribers(userId) {
+  return emitter.listenerCount(channelFor(userId)) > 0;
+}
+
+module.exports = { publish, subscribe, hasSubscribers };

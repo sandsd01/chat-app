@@ -4,10 +4,11 @@ A standalone 1:1 direct-messaging app. You add someone as a friend by sharing yo
 account's short public ID, then message them, with messages delivered live over
 Server-Sent Events (SSE).
 
-This is phase 2: email+password accounts (self-signup) plus the add-by-ID friend
-system that gates who can message whom. Not yet built (tracked as later phases):
-Google sign-in, a PWA manifest + service worker + Web Push, and per-user Google
-Drive message archiving. See `CLAUDE.md` for the architectural reasoning behind
+This is phase 3: email+password accounts (self-signup), the add-by-ID friend
+system that gates who can message whom, and the app is installable (PWA) with
+Web Push notifications for messages that arrive while it isn't open. Not yet
+built (tracked as later phases): Google sign-in and per-user Google Drive
+message archiving. See `CLAUDE.md` for the architectural reasoning behind
 what *is* here.
 
 ## Stack
@@ -93,11 +94,41 @@ route answers `404` (not `403`) to anyone else, and there is no override for rea
 someone else's messages. Message history stays readable after unfriending; only
 sending new messages is blocked.
 
+### Push notifications
+
+| Method | Path | Auth | Description |
+|---|---|---|---|
+| GET | `/api/push/vapid-public-key` | required | The server's VAPID public key, for `PushManager.subscribe()`; `503` if push isn't configured (no `VAPID_*` env vars) |
+| POST | `/api/push/subscribe` | required | Register a browser's `PushSubscription` (`{ subscription: { endpoint, keys: { p256dh, auth } } }`) — upserts on `endpoint`, so re-subscribing the same browser replaces rather than duplicates |
+| POST | `/api/push/unsubscribe` | required | Remove your own subscription by `{ endpoint }` |
+
+A new chat message triggers a push **only** to a recipient with no live SSE
+connection open — someone with the app open in a tab gets the message over
+SSE and never sees a redundant OS notification for it. Push is a best-effort
+fallback for "not connected right now," not a mirror of every SSE event; see
+`CLAUDE.md` for the reasoning and for why friend-request notifications work
+slightly differently.
+
 ## Environment variables
 
 See `.env.example` for the full list with explanations. `DATABASE_URL` and
 `JWT_SECRET` are required; the server refuses to start without them (and refuses a
 placeholder or short `JWT_SECRET`). Everything else is optional.
+
+## PWA
+
+`web/public/manifest.webmanifest`, `web/public/sw.js`, and the icons under
+`web/public/icons/` make the app installable ("Add to Home Screen" / desktop
+install prompt). The service worker registers unconditionally on load — that
+part needs no user action — but it deliberately does **not** cache the app
+shell for offline use; it exists only for installability and to receive push
+while no tab is open. A logged-in user opts into push separately from the
+Account page (`Enable notifications`), which is the one part that needs an
+explicit gesture and browser permission grant.
+
+**iOS note**: Safari only supports Web Push for a PWA that's actually been
+added to the Home Screen (iOS 16.4+) — opening the site in a normal Safari tab
+and granting notification permission there does nothing on iOS.
 
 ## Deployment
 

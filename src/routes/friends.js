@@ -1,9 +1,20 @@
 const express = require("express");
 const prisma = require("../../prisma/client");
 const { authenticate } = require("../middleware/auth");
+const { sendPushToUser } = require("../lib/push");
 
 const router = express.Router();
 router.use(authenticate);
+
+// Friend requests have no SSE stream of their own (see CLAUDE.md's Roadmap —
+// FriendsContext only refetches on mount/action), so unlike chat messages
+// this can't check "does the recipient already have this over a live
+// connection" first. It pushes unconditionally rather than gating on
+// chatBus.hasSubscribers, which would only tell us they have a *chat*
+// stream open, not that they've seen the request.
+async function notify(userId, title, body) {
+  sendPushToUser(userId, { title, body }).catch((err) => console.error("Push notification failed:", err));
+}
 
 const PUBLIC_USER_SELECT = { id: true, publicId: true, name: true, email: true };
 
@@ -96,6 +107,8 @@ router.post("/requests", async (req, res) => {
     const created = await prisma.friendship.create({
       data: { userAId, userBId, status: "pending", requestedById: meId },
     });
+    const me = await prisma.user.findUnique({ where: { id: meId }, select: { name: true, email: true } });
+    notify(target.id, "New friend request", me.name || me.email);
     return res.status(201).json({ requestId: created.id, status: "pending" });
   }
 
@@ -116,6 +129,8 @@ router.post("/requests", async (req, res) => {
     where: { id: existing.id },
     data: { status: "accepted", respondedAt: new Date() },
   });
+  const me = await prisma.user.findUnique({ where: { id: meId }, select: { name: true, email: true } });
+  notify(target.id, "Friend request accepted", `${me.name || me.email} accepted your request`);
   res.status(200).json({ requestId: accepted.id, status: "accepted" });
 });
 
@@ -139,6 +154,8 @@ router.post("/requests/:id/accept", async (req, res) => {
     where: { id: row.id },
     data: { status: "accepted", respondedAt: new Date() },
   });
+  const me = await prisma.user.findUnique({ where: { id: req.user.id }, select: { name: true, email: true } });
+  notify(row.requestedById, "Friend request accepted", `${me.name || me.email} accepted your request`);
   res.json({ status: "accepted" });
 });
 

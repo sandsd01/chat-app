@@ -2,6 +2,7 @@ import { useState } from 'react'
 import { apiFetch } from '../api/client'
 import { useAuth } from '../context/AuthContext'
 import { useLanguage } from '../context/LanguageContext'
+import { usePushSubscription } from '../hooks/usePushSubscription'
 
 export function AccountPage() {
   const { token, user } = useAuth()
@@ -11,6 +12,8 @@ export function AccountPage() {
   const [error, setError] = useState(null)
   const [message, setMessage] = useState(null)
   const [loading, setLoading] = useState(false)
+
+  const push = usePushSubscription(token)
 
   async function handleSubmit(e) {
     e.preventDefault()
@@ -40,6 +43,25 @@ export function AccountPage() {
         <p>
           {t('account.signedInAs')} <strong>{user?.name || user?.email}</strong>
         </p>
+
+        <h2>{t('account.notifications')}</h2>
+        {push.error && <p className="error">{push.error}</p>}
+        {push.status === 'unsupported' && <p className="friends-caption">{t('account.pushUnsupported')}</p>}
+        {push.status === 'denied' && <p className="friends-caption">{t('account.pushDenied')}</p>}
+        {push.status === 'unsubscribed' && (
+          <button type="button" className="btn-secondary" disabled={push.busy} onClick={push.subscribe}>
+            {push.busy ? t('common.loading') : t('account.enableNotifications')}
+          </button>
+        )}
+        {push.status === 'subscribed' && (
+          <>
+            <p className="notice">{t('account.notificationsEnabled')}</p>
+            <button type="button" className="btn-secondary" disabled={push.busy} onClick={push.unsubscribe}>
+              {push.busy ? t('common.loading') : t('account.disableNotifications')}
+            </button>
+          </>
+        )}
+
         <h2>{t('account.changePassword')}</h2>
         {error && <p className="error">{error}</p>}
         {message && <p className="notice">{message}</p>}

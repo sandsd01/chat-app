@@ -1,6 +1,14 @@
 process.env.DATABASE_URL =
   process.env.DATABASE_URL || "postgresql://postgres:postgres@localhost:5432/chatapp_test";
 process.env.JWT_SECRET = process.env.JWT_SECRET || "test-secret";
+// Fake but well-formed-enough values so src/lib/push.js#ensureConfigured()
+// takes the "configured" path in tests — actual network calls to a push
+// service are mocked (see tests/push.test.js) rather than made for real.
+process.env.VAPID_PUBLIC_KEY =
+  process.env.VAPID_PUBLIC_KEY ||
+  "BDn-sseZsRNWFx7tSgu6lhKFC1JwFTOdj2V_DyNh5jHLPvx3wlIwps2ZZZcmoZcJPmdP065KcKdbrGHL5B8CdMc";
+process.env.VAPID_PRIVATE_KEY = process.env.VAPID_PRIVATE_KEY || "zUPloQdUN-nersT6XNG1BMaENNGa-t2ypwKiTUNj3sY";
+process.env.VAPID_SUBJECT = process.env.VAPID_SUBJECT || "mailto:test@example.com";
 
 const bcrypt = require("bcryptjs");
 const prisma = require("../../prisma/client");
@@ -10,6 +18,7 @@ async function resetDb() {
   await prisma.message.deleteMany();
   await prisma.conversation.deleteMany();
   await prisma.friendship.deleteMany();
+  await prisma.pushSubscription.deleteMany();
   await prisma.user.deleteMany();
 }
 
