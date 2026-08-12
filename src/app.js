@@ -3,6 +3,7 @@ const path = require("path");
 const express = require("express");
 const cors = require("cors");
 const helmet = require("helmet");
+const cookieParser = require("cookie-parser");
 
 const authRoutes = require("./routes/auth");
 const userRoutes = require("./routes/users");
@@ -53,6 +54,9 @@ if (corsOrigin) {
 }
 
 app.use(express.json());
+// Only used by the Google OAuth state cookie (src/routes/auth.js) — the app
+// otherwise has no session/cookie state, auth is bearer-JWT only.
+app.use(cookieParser());
 
 // No response-compression middleware is mounted, deliberately. gzip buffers
 // output, so it would hold GET /api/chat/stream's SSE frames instead of

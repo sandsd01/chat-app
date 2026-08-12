@@ -9,6 +9,13 @@ function hashToken(token) {
   return crypto.createHash("sha256").update(token).digest("hex");
 }
 
+describe("Google sign-in, not configured (no GOOGLE_* env vars in this test process)", () => {
+  test("GET /auth/google 503s rather than crashing", async () => {
+    const res = await request(app).get("/api/auth/google");
+    assert.equal(res.status, 503);
+  });
+});
+
 describe("POST /auth/signup", () => {
   beforeEach(async () => {
     await resetDb();

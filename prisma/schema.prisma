@@ -19,7 +19,15 @@ model User {
   /// at creation (src/lib/publicId.js) and never changes.
   publicId            String    @unique
   name                String?
-  passwordHash        String
+  /// Nullable because a Google-only account never sets one — POST
+  /// /auth/login must check for null before bcrypt.compare (comparing
+  /// against null throws) and tell the caller to use Google instead.
+  passwordHash        String?
+  /// Google's stable per-account subject identifier ("sub" claim), set once
+  /// on first Google sign-in and never changed. Distinct from checking
+  /// `email` alone: Google itself may let a user change the email on their
+  /// Google account, but `sub` never changes, so this is the actual link.
+  googleId            String?   @unique
   failedLoginAttempts Int       @default(0)
   lockedUntil         DateTime?
   resetTokenHash      String?

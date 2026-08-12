@@ -53,6 +53,9 @@ export function SignupPage() {
         <button type="submit" disabled={loading}>
           {loading ? t('signup.submitting') : t('signup.submit')}
         </button>
+        <a href="/api/auth/google" className="btn-secondary button">
+          {t('login.continueWithGoogle')}
+        </a>
         <Link to="/login">{t('login.backToLogin')}</Link>
       </form>
     </div>

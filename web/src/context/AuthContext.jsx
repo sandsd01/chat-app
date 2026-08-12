@@ -52,13 +52,22 @@ export function AuthProvider({ children }) {
     setUser(data.user)
   }
 
+  // Exchanges the short-lived ticket GET /auth/google/callback redirected the
+  // browser with (see OAuthCallbackPage) for a real token, the same
+  // ticket->JWT handoff src/routes/chat.js's SSE stream uses.
+  async function loginWithGoogleTicket(ticket) {
+    const data = await apiFetch('/auth/google/exchange', { method: 'POST', body: { ticket } })
+    setToken(data.token)
+    setUser(data.user)
+  }
+
   function logout() {
     setToken(null)
     setUser(null)
   }
 
   return (
-    <AuthContext.Provider value={{ token, user, login, signup, logout }}>
+    <AuthContext.Provider value={{ token, user, login, signup, loginWithGoogleTicket, logout }}>
       {children}
     </AuthContext.Provider>
   )

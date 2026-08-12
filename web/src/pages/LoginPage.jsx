@@ -1,7 +1,14 @@
 import { useState } from 'react'
-import { Link, useNavigate } from 'react-router-dom'
+import { Link, useNavigate, useSearchParams } from 'react-router-dom'
 import { useAuth } from '../context/AuthContext'
 import { useLanguage } from '../context/LanguageContext'
+
+const OAUTH_ERROR_KEYS = {
+  invalid_state: 'login.oauthErrorState',
+  google_exchange_failed: 'login.oauthErrorExchange',
+  email_not_verified: 'login.oauthErrorUnverified',
+  google_not_configured: 'login.oauthErrorUnconfigured',
+}
 
 export function LoginPage() {
   const [email, setEmail] = useState('')
@@ -11,6 +18,12 @@ export function LoginPage() {
   const { login } = useAuth()
   const { language, setLanguage, t } = useLanguage()
   const navigate = useNavigate()
+  const [searchParams] = useSearchParams()
+
+  const oauthErrorCode = searchParams.get('error')
+  const oauthError = oauthErrorCode
+    ? t(OAUTH_ERROR_KEYS[oauthErrorCode] || 'login.oauthErrorGeneric')
+    : null
 
   async function handleSubmit(e) {
     e.preventDefault()
@@ -41,6 +54,7 @@ export function LoginPage() {
             <option value="th">ไทย</option>
           </select>
         </div>
+        {oauthError && <p className="error">{oauthError}</p>}
         {error && <p className="error">{error}</p>}
         <label>
           {t('login.email')}
@@ -63,6 +77,9 @@ export function LoginPage() {
         <button type="submit" disabled={loading}>
           {loading ? t('login.submitting') : t('login.submit')}
         </button>
+        <a href="/api/auth/google" className="btn-secondary button">
+          {t('login.continueWithGoogle')}
+        </a>
         <Link to="/forgot-password">{t('login.forgotPassword')}</Link>
         <Link to="/signup">{t('login.needAccount')}</Link>
       </form>

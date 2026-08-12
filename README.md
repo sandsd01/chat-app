@@ -4,12 +4,12 @@ A standalone 1:1 direct-messaging app. You add someone as a friend by sharing yo
 account's short public ID, then message them, with messages delivered live over
 Server-Sent Events (SSE).
 
-This is phase 3: email+password accounts (self-signup), the add-by-ID friend
-system that gates who can message whom, and the app is installable (PWA) with
-Web Push notifications for messages that arrive while it isn't open. Not yet
-built (tracked as later phases): Google sign-in and per-user Google Drive
-message archiving. See `CLAUDE.md` for the architectural reasoning behind
-what *is* here.
+This is phase 4: email+password accounts (self-signup) or Google sign-in, the
+add-by-ID friend system that gates who can message whom, and the app is
+installable (PWA) with Web Push notifications for messages that arrive while
+it isn't open. Not yet built (tracked as a later phase): per-user Google
+Drive message archiving. See `CLAUDE.md` for the architectural reasoning
+behind what *is* here.
 
 ## Stack
 
@@ -51,13 +51,23 @@ All routes are namespaced under `/api`.
 | Method | Path | Auth | Description |
 |---|---|---|---|
 | POST | `/api/auth/signup` | — | Create an account (email + password, 8+ chars); returns a JWT and the user, including their generated `publicId` |
-| POST | `/api/auth/login` | — | Email + password login |
+| POST | `/api/auth/login` | — | Email + password login; `401` with a clear message if the account is Google-only (no password set) |
+| GET | `/api/auth/google` | — | Starts Google sign-in: sets a CSRF state cookie and redirects to Google's consent screen; `503` if not configured |
+| GET | `/api/auth/google/callback` | — | Google redirects the browser back here; on success redirects to `${APP_URL}/oauth-callback?ticket=` (a single-use, 30-second ticket — never the real JWT in a URL), on failure to `${APP_URL}/login?error=` |
+| POST | `/api/auth/google/exchange` | — | Exchange the callback's ticket for a real JWT + user, `{ ticket }` → `{ token, user }` |
 | GET | `/api/auth/me` | required | The caller's own profile |
 | POST | `/api/auth/logout` | — | No-op; the client just discards the token |
 | PATCH | `/api/auth/password` | required | Change your own password |
 | POST | `/api/auth/forgot-password` | — | Request a reset link (always a generic response, to avoid account enumeration) |
 | POST | `/api/auth/reset-password` | — | Reset with a valid, unexpired token |
 | DELETE | `/api/users/me` | required | Delete your own account (`409` if you have chat history) |
+
+Signing in with Google auto-links to an existing password account with the
+same (Google-verified) email, rather than creating a second account — one
+person, one account, whichever way they signed in. A Google-only account has
+no password (`PATCH /auth/password` `400`s on it, "This account signs in with
+Google and has no password to change") until it also completes a password
+reset, which sets one.
 
 ### Friends
 
@@ -114,6 +124,16 @@ slightly differently.
 See `.env.example` for the full list with explanations. `DATABASE_URL` and
 `JWT_SECRET` are required; the server refuses to start without them (and refuses a
 placeholder or short `JWT_SECRET`). Everything else is optional.
+
+## Google sign-in
+
+Optional — see `.env.example` for `GOOGLE_CLIENT_ID`/`GOOGLE_CLIENT_SECRET`/`GOOGLE_REDIRECT_URI`.
+Without them, `GET /api/auth/google` `503`s and the "Continue with Google"
+link on the login/signup pages leads to that; email+password still works
+either way. `GOOGLE_REDIRECT_URI` must match one of the OAuth client's
+"Authorized redirect URIs" in Google Cloud Console *exactly*, and while the
+consent screen is in Testing mode, only accounts explicitly added as test
+users can complete sign-in.
 
 ## PWA
 
