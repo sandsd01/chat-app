@@ -95,15 +95,19 @@ a conversation or send them a message.
 | GET | `/api/chat/conversations` | required | Your own conversations, most recently active first |
 | POST | `/api/chat/conversations` | required | Find-or-create a 1:1 conversation with `{ userId }` — `403` if you're not friends, `201` new, `200` existing |
 | GET | `/api/chat/conversations/:id/messages?before=&limit=` | required | Newest-first page of messages, `{ data, hasMore, nextBefore }` |
+| GET | `/api/chat/conversations/:id/messages/drive-history?before=&limit=` | required | Same shape, but reads from *your own* Google Drive archive — the fallback once Postgres has nothing older left (see Google Drive backup below); an empty page (never an error) if Drive isn't connected or this conversation was never archived |
 | POST | `/api/chat/conversations/:id/messages` | required | Send a message (`{ body }`, 1–4000 characters) — `403` if you're no longer friends with the other participant |
 | POST | `/api/chat/conversations/:id/read` | required | Mark the conversation read up to now |
 | POST | `/api/chat/stream-ticket` | required | Mint a single-use, 30-second ticket for the SSE stream below |
-| GET | `/api/chat/stream?ticket=` | ticket only | SSE stream of `message` events for your own conversations |
+| GET | `/api/chat/stream?ticket=` | ticket only | SSE stream of `message` (and `friend`) events for your own conversations/account |
 
 A conversation is visible only to its two participants — every `/api/chat/conversations/:id/*`
 route answers `404` (not `403`) to anyone else, and there is no override for reading
 someone else's messages. Message history stays readable after unfriending; only
-sending new messages is blocked.
+sending new messages is blocked. History that's been pruned from the server (see
+below) is still readable through the same "load older messages" scrolling — the
+chat UI falls back to `drive-history` transparently once the regular page runs out,
+for anyone with Drive backup connected.
 
 ### Push notifications
 
@@ -138,10 +142,11 @@ server periodically archives each new message into a JSONL file per
 conversation inside a "Chat Backups" folder in that user's own Drive, and
 deletes a message from its own database only once **every** participant of
 that conversation has archived past it — a conversation where the other
-side never connects Drive simply never gets pruned. See `CLAUDE.md` for the
-full reasoning, including what's still out of scope (there's no in-app way
-yet to read history back out of Drive once it's been pruned — it lives in
-the user's own Drive file, not in the app's UI).
+side never connects Drive simply never gets pruned. Pruned history is still
+reachable in the chat UI itself: scrolling up past what Postgres has left
+transparently falls back to `GET .../messages/drive-history` (see the Chat
+routes table above), reading it straight out of the connected user's own
+Drive file. See `CLAUDE.md` for the full reasoning.
 
 ## Environment variables
 

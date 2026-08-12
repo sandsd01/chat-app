@@ -16,7 +16,7 @@ const request = require("supertest");
 const { OAuth2Client } = require("google-auth-library");
 const { resetDb, createUser, prisma } = require("./helpers/db");
 const { encryptSecret, decryptSecret } = require("../src/lib/crypto");
-const { archiveUserConversations, pruneArchivedMessages } = require("../src/lib/drive");
+const { archiveUserConversations, pruneArchivedMessages, readArchivedMessages } = require("../src/lib/drive");
 const app = require("../src/app");
 
 function parseQuery(url) {
@@ -338,6 +338,149 @@ describe("Google Drive backup", () => {
         null,
         "both sides have now archived it, so it should be pruned"
       );
+    });
+  });
+
+  describe("src/lib/drive.js#readArchivedMessages", () => {
+    test("empty page for a user with no Drive connection", async () => {
+      const conversation = await makeConversation(alice, bob);
+      const result = await readArchivedMessages(alice.id, conversation.id);
+      assert.deepEqual(result, { data: [], hasMore: false, nextBefore: null });
+    });
+
+    test("empty page for a connected user who never archived this conversation", async (t) => {
+      installFakeDrive(t);
+      await prisma.user.update({
+        where: { id: alice.id },
+        data: { driveRefreshTokenEnc: encryptSecret("refresh-token"), driveConnectedAt: new Date() },
+      });
+      const conversation = await makeConversation(alice, bob);
+      const result = await readArchivedMessages(alice.id, conversation.id);
+      assert.deepEqual(result, { data: [], hasMore: false, nextBefore: null });
+    });
+
+    test("reads back messages that were pruned from Postgres, newest-first", async (t) => {
+      installFakeDrive(t);
+      await prisma.user.update({
+        where: { id: alice.id },
+        data: { driveRefreshTokenEnc: encryptSecret("refresh-token"), driveConnectedAt: new Date() },
+      });
+      const conversation = await makeConversation(alice, bob);
+      const m1 = await sendMessage(conversation, alice, "one");
+      const m2 = await sendMessage(conversation, bob, "two");
+      const m3 = await sendMessage(conversation, alice, "three");
+
+      await archiveUserConversations(alice.id);
+      // Simulate the prune this app only ever does once BOTH sides have
+      // archived — here we just delete directly to isolate this test from
+      // needing a second connected account.
+      await prisma.message.deleteMany({ where: { conversationId: conversation.id } });
+
+      const result = await readArchivedMessages(alice.id, conversation.id);
+      assert.equal(result.hasMore, false);
+      assert.deepEqual(
+        result.data.map((m) => m.id),
+        [m3.id, m2.id, m1.id]
+      );
+      assert.deepEqual(
+        result.data.map((m) => m.body),
+        ["three", "two", "one"]
+      );
+      // conversationId is stamped on even though the archive file itself
+      // doesn't store it (see fileNameForConversation) — the caller always
+      // knows which conversation it asked about.
+      assert.ok(result.data.every((m) => m.conversationId === conversation.id));
+    });
+
+    test("paginates with the same before/hasMore/nextBefore convention as the Postgres route", async (t) => {
+      installFakeDrive(t);
+      await prisma.user.update({
+        where: { id: alice.id },
+        data: { driveRefreshTokenEnc: encryptSecret("refresh-token"), driveConnectedAt: new Date() },
+      });
+      const conversation = await makeConversation(alice, bob);
+      const sent = [];
+      for (let i = 0; i < 5; i++) {
+        sent.push(await sendMessage(conversation, alice, `msg-${i}`));
+      }
+      await archiveUserConversations(alice.id);
+      await prisma.message.deleteMany({ where: { conversationId: conversation.id } });
+
+      const firstPage = await readArchivedMessages(alice.id, conversation.id, { limit: 2 });
+      assert.equal(firstPage.hasMore, true);
+      assert.deepEqual(
+        firstPage.data.map((m) => m.id),
+        [sent[4].id, sent[3].id]
+      );
+      assert.equal(firstPage.nextBefore, sent[3].id);
+
+      const secondPage = await readArchivedMessages(alice.id, conversation.id, {
+        before: firstPage.nextBefore,
+        limit: 2,
+      });
+      assert.equal(secondPage.hasMore, true);
+      assert.deepEqual(
+        secondPage.data.map((m) => m.id),
+        [sent[2].id, sent[1].id]
+      );
+
+      const thirdPage = await readArchivedMessages(alice.id, conversation.id, {
+        before: secondPage.nextBefore,
+        limit: 2,
+      });
+      assert.equal(thirdPage.hasMore, false);
+      assert.deepEqual(
+        thirdPage.data.map((m) => m.id),
+        [sent[0].id]
+      );
+      assert.equal(thirdPage.nextBefore, null);
+    });
+  });
+
+  describe("GET /chat/conversations/:id/messages/drive-history", () => {
+    test("requires authentication", async () => {
+      const res = await request(app).get("/api/chat/conversations/1/messages/drive-history");
+      assert.equal(res.status, 401);
+    });
+
+    test("404s for a non-participant", async (t) => {
+      installFakeDrive(t);
+      const conversation = await makeConversation(alice, bob);
+      await createUser({ email: "carol@test.com", password: "carolpass1" });
+      const carolToken = await login("carol@test.com", "carolpass1");
+
+      const res = await request(app)
+        .get(`/api/chat/conversations/${conversation.id}/messages/drive-history`)
+        .set("Authorization", `Bearer ${carolToken}`);
+      assert.equal(res.status, 404);
+    });
+
+    test("returns pruned history for a participant with Drive connected", async (t) => {
+      installFakeDrive(t);
+      await prisma.user.update({
+        where: { id: alice.id },
+        data: { driveRefreshTokenEnc: encryptSecret("refresh-token"), driveConnectedAt: new Date() },
+      });
+      const conversation = await makeConversation(alice, bob);
+      const message = await sendMessage(conversation, alice, "archived and pruned");
+      await archiveUserConversations(alice.id);
+      await prisma.message.deleteMany({ where: { conversationId: conversation.id } });
+
+      const res = await request(app)
+        .get(`/api/chat/conversations/${conversation.id}/messages/drive-history`)
+        .set("Authorization", `Bearer ${aliceToken}`);
+      assert.equal(res.status, 200);
+      assert.equal(res.body.data.length, 1);
+      assert.equal(res.body.data[0].id, message.id);
+      assert.equal(res.body.data[0].body, "archived and pruned");
+    });
+
+    test("400s on a non-numeric before", async () => {
+      const conversation = await makeConversation(alice, bob);
+      const res = await request(app)
+        .get(`/api/chat/conversations/${conversation.id}/messages/drive-history?before=not-a-number`)
+        .set("Authorization", `Bearer ${aliceToken}`);
+      assert.equal(res.status, 400);
     });
   });
 });

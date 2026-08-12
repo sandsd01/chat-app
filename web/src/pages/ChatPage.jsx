@@ -4,7 +4,8 @@ import { useAuth } from '../context/AuthContext'
 import { useLanguage } from '../context/LanguageContext'
 import { useChat } from '../context/ChatContext'
 import { useFriends } from '../context/FriendsContext'
-import { listMessages, sendMessage } from '../api/chat'
+import { listMessages, listDriveHistory, sendMessage } from '../api/chat'
+import { useDriveBackup } from '../hooks/useDriveBackup'
 
 const MESSAGE_PAGE_SIZE = 50
 const SCROLL_BOTTOM_THRESHOLD = 80
@@ -65,6 +66,12 @@ export function ChatPage() {
     startChat,
   } = useChat()
   const { friends } = useFriends()
+  // Only worth trying the Drive fallback once Postgres history runs out if
+  // this account even has Drive connected — otherwise every conversation's
+  // "reached the top" moment would fire a request that can only ever come
+  // back empty.
+  const { status: driveStatus } = useDriveBackup(token)
+  const driveConnected = driveStatus === 'connected'
 
   const activeConversationId = conversationIdParam ? Number(conversationIdParam) : null
   const activeConversation = conversations.find((c) => c.id === activeConversationId) || null
@@ -130,6 +137,10 @@ export function ChatPage() {
   const [messagesError, setMessagesError] = useState(null)
   const [hasMore, setHasMore] = useState(false)
   const [nextBefore, setNextBefore] = useState(null)
+  // Tracked separately from hasMore/nextBefore: only consulted once
+  // Postgres's own hasMore goes false, and reset per-conversation the same
+  // way (see the load effect below).
+  const [driveHasMore, setDriveHasMore] = useState(false)
   const [loadingOlder, setLoadingOlder] = useState(false)
   const [draft, setDraft] = useState('')
 
@@ -146,6 +157,7 @@ export function ChatPage() {
       setMessages([])
       setHasMore(false)
       setNextBefore(null)
+      setDriveHasMore(false)
       return
     }
     let cancelled = false
@@ -157,6 +169,7 @@ export function ChatPage() {
         setMessages([...res.data].reverse())
         setHasMore(res.hasMore)
         setNextBefore(res.nextBefore)
+        setDriveHasMore(driveConnected)
         isAtBottomRef.current = true
         requestAnimationFrame(scrollToBottom)
       })
@@ -169,7 +182,12 @@ export function ChatPage() {
     return () => {
       cancelled = true
     }
-  }, [activeConversationId, token, scrollToBottom])
+    // driveConnected is included so that if Drive's own status check
+    // resolves shortly after this conversation's messages already loaded,
+    // driveHasMore still gets set correctly — at the cost of one redundant
+    // refetch of this same page on that (one-time, per conversation-open)
+    // transition.
+  }, [activeConversationId, token, scrollToBottom, driveConnected])
 
   // Mark read whenever a thread is opened (or switched to).
   useEffect(() => {
@@ -201,16 +219,31 @@ export function ChatPage() {
     })
   }, [activeConversationId, subscribeToConversation, markConversationRead, user.id, scrollToBottom])
 
+  // Postgres first, then — once it's exhausted — this account's own Drive
+  // archive for this conversation, using the oldest message currently on
+  // screen as the cursor either way. Both sources return the same
+  // {data, hasMore, nextBefore} shape, so the rest of this function doesn't
+  // need to know which one it just called.
   async function loadOlder() {
-    if (!hasMore || loadingOlder || nextBefore == null) return
+    if (loadingOlder || messagesLoading) return
+    const fromDrive = !hasMore
+    if (fromDrive && !driveHasMore) return
+    if (!fromDrive && nextBefore == null) return
+
     setLoadingOlder(true)
     const el = messagesElRef.current
     const prevScrollHeight = el?.scrollHeight ?? 0
     try {
-      const res = await listMessages(activeConversationId, { before: nextBefore, limit: MESSAGE_PAGE_SIZE }, token)
+      const res = fromDrive
+        ? await listDriveHistory(activeConversationId, { before: messages[0]?.id, limit: MESSAGE_PAGE_SIZE }, token)
+        : await listMessages(activeConversationId, { before: nextBefore, limit: MESSAGE_PAGE_SIZE }, token)
       setMessages((prev) => [...[...res.data].reverse(), ...prev])
-      setHasMore(res.hasMore)
-      setNextBefore(res.nextBefore)
+      if (fromDrive) {
+        setDriveHasMore(res.hasMore)
+      } else {
+        setHasMore(res.hasMore)
+        setNextBefore(res.nextBefore)
+      }
       requestAnimationFrame(() => {
         if (el) el.scrollTop = el.scrollHeight - prevScrollHeight
       })
@@ -226,7 +259,7 @@ export function ChatPage() {
     if (!el) return
     const distanceFromBottom = el.scrollHeight - el.scrollTop - el.clientHeight
     isAtBottomRef.current = distanceFromBottom < SCROLL_BOTTOM_THRESHOLD
-    if (el.scrollTop < SCROLL_TOP_LOAD_THRESHOLD && hasMore && !loadingOlder && !messagesLoading) {
+    if (el.scrollTop < SCROLL_TOP_LOAD_THRESHOLD && (hasMore || driveHasMore) && !loadingOlder && !messagesLoading) {
       loadOlder()
     }
   }
@@ -402,9 +435,11 @@ export function ChatPage() {
 
               <div className="chat-messages" ref={messagesElRef} onScroll={handleScroll}>
                 {messagesError && <p className="error">{messagesError}</p>}
-                {hasMore && (
+                {(hasMore || driveHasMore) && (
                   <button type="button" className="chat-load-more" onClick={loadOlder} disabled={loadingOlder}>
-                    {loadingOlder ? t('common.loading') : t('chat.loadOlder')}
+                    {loadingOlder
+                      ? t(!hasMore && driveHasMore ? 'chat.loadingFromDrive' : 'common.loading')
+                      : t('chat.loadOlder')}
                   </button>
                 )}
                 {messagesLoading ? (

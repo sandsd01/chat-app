@@ -197,6 +197,57 @@ async function pruneArchivedMessages() {
   return { deleted };
 }
 
+// Reads a page of this user's OWN archived history for one conversation,
+// straight out of their Drive file — used once GET
+// /chat/conversations/:id/messages has run out of Postgres rows to fall
+// back to (a message only leaves Postgres once BOTH participants have
+// archived it, but each participant's own file still has everything they
+// personally archived). Paginates with the exact same {data, hasMore,
+// nextBefore} shape and newest-first/`before`-cursor convention as that
+// route, so the frontend can treat "keep scrolling up" as one continuous
+// list regardless of which source a page came from. Silently returns an
+// empty page (never throws) when Drive isn't connected or this
+// conversation was never archived — those are normal, not error, states.
+async function readArchivedMessages(userId, conversationId, { before, limit = 50 } = {}) {
+  const empty = { data: [], hasMore: false, nextBefore: null };
+
+  const user = await prisma.user.findUnique({ where: { id: userId } });
+  if (!user?.driveRefreshTokenEnc) return empty;
+
+  const archiveFile = await prisma.driveArchiveFile.findUnique({
+    where: { userId_conversationId: { userId, conversationId } },
+  });
+  if (!archiveFile) return empty;
+
+  const accessToken = await getAccessTokenForUser(user);
+  const content = await downloadFileContent(accessToken, archiveFile.driveFileId);
+
+  const all = content
+    .split("\n")
+    .filter(Boolean)
+    .map((line) => {
+      try {
+        return JSON.parse(line);
+      } catch {
+        return null;
+      }
+    })
+    .filter(Boolean)
+    .sort((a, b) => a.id - b.id);
+
+  const eligible = before !== undefined ? all.filter((m) => m.id < before) : all;
+  const hasMore = eligible.length > limit;
+  // The `limit` entries closest to `before` — i.e. the tail of the
+  // ascending, already-filtered array — then reversed to match the
+  // Postgres route's newest-first ordering.
+  const page = eligible
+    .slice(Math.max(0, eligible.length - limit))
+    .reverse()
+    .map((m) => ({ id: m.id, conversationId, senderId: m.senderId, body: m.body, createdAt: m.createdAt }));
+
+  return { data: page, hasMore, nextBefore: hasMore ? page[page.length - 1].id : null };
+}
+
 async function runArchiveSweep() {
   const users = await prisma.user.findMany({ where: { driveRefreshTokenEnc: { not: null } } });
   for (const user of users) {
@@ -216,4 +267,5 @@ module.exports = {
   archiveUserConversations,
   pruneArchivedMessages,
   runArchiveSweep,
+  readArchivedMessages,
 };
