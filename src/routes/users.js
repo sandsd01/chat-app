@@ -6,6 +6,38 @@ const router = express.Router();
 
 router.use(authenticate);
 
+const PUBLIC_ID_PATTERN = /^[a-zA-Z0-9]{4,20}$/;
+
+// A user gets one shot at replacing their randomly generated publicId with a
+// chosen one (see the publicIdCustomized comment on the User model) — once
+// spent, this always 409s rather than letting them keep picking a new one.
+router.patch("/me", async (req, res) => {
+  const { publicId } = req.body || {};
+
+  // req.user is just the JWT payload (id/email/role) — publicIdCustomized
+  // lives in the database, not the token, so it has to be read fresh here.
+  const me = await prisma.user.findUnique({ where: { id: req.user.id } });
+  if (me.publicIdCustomized) {
+    return res.status(409).json({ error: "You've already set a custom ID" });
+  }
+  if (typeof publicId !== "string" || !PUBLIC_ID_PATTERN.test(publicId)) {
+    return res.status(400).json({ error: "publicId must be 4-20 letters or numbers" });
+  }
+
+  const existing = await prisma.user.findFirst({
+    where: { publicId: { equals: publicId, mode: "insensitive" } },
+  });
+  if (existing) {
+    return res.status(409).json({ error: "That ID is already taken" });
+  }
+
+  const updated = await prisma.user.update({
+    where: { id: req.user.id },
+    data: { publicId, publicIdCustomized: true },
+  });
+  res.json({ publicId: updated.publicId });
+});
+
 // There is no admin role in this app (phase 1 is email+password only, one
 // flat kind of account), so the only user-management action is deleting
 // your own account — never someone else's.

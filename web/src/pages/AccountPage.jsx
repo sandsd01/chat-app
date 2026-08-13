@@ -1,10 +1,13 @@
 import { useState } from 'react'
 import { useSearchParams } from 'react-router-dom'
 import { apiFetch } from '../api/client'
+import { setCustomPublicId } from '../api/users'
 import { useAuth } from '../context/AuthContext'
 import { useLanguage } from '../context/LanguageContext'
 import { usePushSubscription } from '../hooks/usePushSubscription'
 import { useDriveBackup } from '../hooks/useDriveBackup'
+
+const PUBLIC_ID_PATTERN = /^[a-zA-Z0-9]{4,20}$/
 
 const DRIVE_ERROR_KEYS = {
   invalid_state: 'account.driveErrorInvalidState',
@@ -14,7 +17,7 @@ const DRIVE_ERROR_KEYS = {
 }
 
 export function AccountPage() {
-  const { token, user } = useAuth()
+  const { token, user, updateUser } = useAuth()
   const { t } = useLanguage()
   const [currentPassword, setCurrentPassword] = useState('')
   const [newPassword, setNewPassword] = useState('')
@@ -23,11 +26,34 @@ export function AccountPage() {
   const [loading, setLoading] = useState(false)
   const [searchParams] = useSearchParams()
 
+  const [customId, setCustomId] = useState('')
+  const [customIdError, setCustomIdError] = useState(null)
+  const [customIdSaved, setCustomIdSaved] = useState(false)
+  const [customIdBusy, setCustomIdBusy] = useState(false)
+
   const push = usePushSubscription(token)
   const drive = useDriveBackup(token)
 
   const driveErrorCode = searchParams.get('driveError')
   const driveError = driveErrorCode ? t(DRIVE_ERROR_KEYS[driveErrorCode] || 'account.driveErrorGeneric') : null
+
+  async function handleSetCustomId() {
+    setCustomIdError(null)
+    if (!PUBLIC_ID_PATTERN.test(customId)) {
+      setCustomIdError(t('account.customIdHint'))
+      return
+    }
+    setCustomIdBusy(true)
+    try {
+      const result = await setCustomPublicId(customId, token)
+      updateUser({ publicId: result.publicId, publicIdCustomized: true })
+      setCustomIdSaved(true)
+    } catch (err) {
+      setCustomIdError(err.message)
+    } finally {
+      setCustomIdBusy(false)
+    }
+  }
 
   async function handleSubmit(e) {
     e.preventDefault()
@@ -57,6 +83,31 @@ export function AccountPage() {
         <p>
           {t('account.signedInAs')} <strong>{user?.name || user?.email}</strong>
         </p>
+        <p>
+          {t('account.yourId')} <code className="friends-id-code">{user?.publicId}</code>
+        </p>
+        {!user?.publicIdCustomized && (
+          <>
+            {customIdSaved ? (
+              <p className="notice">{t('account.customIdSuccess')}</p>
+            ) : (
+              <div className="account-custom-id">
+                {customIdError && <p className="error">{customIdError}</p>}
+                <p className="friends-caption">{t('account.customIdHint')}</p>
+                <input
+                  type="text"
+                  value={customId}
+                  onChange={(e) => setCustomId(e.target.value)}
+                  placeholder={t('account.customIdPlaceholder')}
+                  maxLength={20}
+                />
+                <button type="button" className="btn-secondary" disabled={customIdBusy} onClick={handleSetCustomId}>
+                  {customIdBusy ? t('common.loading') : t('account.setCustomId')}
+                </button>
+              </div>
+            )}
+          </>
+        )}
 
         <hr className="section-divider" />
         <h2>{t('account.notifications')}</h2>

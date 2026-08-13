@@ -12,12 +12,17 @@ datasource db {
 model User {
   id                  Int       @id @default(autoincrement())
   email               String    @unique
-  /// A short, random, shareable code (e.g. "K7XQPM2R"), distinct from the
-  /// numeric primary key on purpose: `id` is sequential and guessable
-  /// (id=2 tells you id=1 exists), which is fine for internal FKs but not
-  /// for something users hand out publicly to be found by. Generated once
-  /// at creation (src/lib/publicId.js) and never changes.
+  /// A short, shareable code (e.g. "K7XQPM2R"), distinct from the numeric
+  /// primary key on purpose: `id` is sequential and guessable (id=2 tells
+  /// you id=1 exists), which is fine for internal FKs but not for something
+  /// users hand out publicly to be found by. Randomly generated at creation
+  /// (src/lib/publicId.js); a user may replace it with a chosen one exactly
+  /// once via PATCH /api/users/me, tracked by publicIdCustomized below.
   publicId            String    @unique
+  /// Set true the moment a user spends their one-time custom publicId
+  /// change (PATCH /api/users/me) — false means the value above is still
+  /// the randomly generated original.
+  publicIdCustomized  Boolean   @default(false)
   name                String?
   /// Nullable because a Google-only account never sets one — POST
   /// /auth/login must check for null before bcrypt.compare (comparing

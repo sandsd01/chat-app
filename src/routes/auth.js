@@ -24,7 +24,13 @@ function signToken(user) {
 }
 
 function publicUser(user) {
-  return { id: user.id, publicId: user.publicId, email: user.email, name: user.name };
+  return {
+    id: user.id,
+    publicId: user.publicId,
+    publicIdCustomized: user.publicIdCustomized,
+    email: user.email,
+    name: user.name,
+  };
 }
 
 function appUrl() {
