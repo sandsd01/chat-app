@@ -12,7 +12,7 @@ const PUBLIC_ID_PATTERN = /^[a-zA-Z0-9]{4,20}$/;
 // chosen one (see the publicIdCustomized comment on the User model) — once
 // spent, this always 409s rather than letting them keep picking a new one.
 router.patch("/me", async (req, res) => {
-  const { publicId } = req.body || {};
+  const raw = req.body?.publicId;
 
   // req.user is just the JWT payload (id/email/role) — publicIdCustomized
   // lives in the database, not the token, so it has to be read fresh here.
@@ -20,9 +20,14 @@ router.patch("/me", async (req, res) => {
   if (me.publicIdCustomized) {
     return res.status(409).json({ error: "You've already set a custom ID" });
   }
-  if (typeof publicId !== "string" || !PUBLIC_ID_PATTERN.test(publicId)) {
+  if (typeof raw !== "string" || !PUBLIC_ID_PATTERN.test(raw)) {
     return res.status(400).json({ error: "publicId must be 4-20 letters or numbers" });
   }
+  // Uppercased to match the alphabet randomly generated ids already use
+  // (src/lib/publicId.js) — GET /friends/lookup uppercases whatever it's
+  // given before querying, so a stored lowercase id would never match a
+  // lookup and 404 as "No account with that ID".
+  const publicId = raw.toUpperCase();
 
   const existing = await prisma.user.findFirst({
     where: { publicId: { equals: publicId, mode: "insensitive" } },
