@@ -1069,6 +1069,81 @@ td:has(+ td) {
   background: var(--bg-subtle);
 }
 
+.chat-composer-file-input {
+  display: none;
+}
+
+.chat-composer-attach-btn {
+  flex-shrink: 0;
+  min-width: unset;
+  width: 36px;
+  height: 36px;
+  padding: 0;
+  border-radius: 50%;
+  border: 1px solid var(--border);
+  background: var(--bg-subtle);
+  font-size: 16px;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.chat-composer-attach-btn:hover:not(:disabled) {
+  background: var(--bg-raised);
+}
+
+.chat-composer-attach-btn:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+.chat-attachment-image-link {
+  display: block;
+}
+
+.chat-attachment-image {
+  display: block;
+  max-width: 240px;
+  max-height: 240px;
+  border-radius: 8px;
+  margin-bottom: 4px;
+  object-fit: cover;
+}
+
+.chat-attachment-file {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px;
+  margin-bottom: 4px;
+  border-radius: 8px;
+  background: var(--bg-subtle);
+  text-decoration: none;
+  color: inherit;
+}
+
+.chat-attachment-file-icon {
+  font-size: 24px;
+}
+
+.chat-attachment-file-info {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.chat-attachment-file-name {
+  font-size: 14px;
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.chat-attachment-file-size {
+  font-size: 12px;
+  opacity: 0.7;
+}
+
 @media (max-width: 780px) {
   .chat-layout {
     height: calc(100svh - 200px);
