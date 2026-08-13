@@ -135,11 +135,24 @@ model Conversation {
 }
 
 model Message {
-  id             Int      @id @default(autoincrement())
-  conversationId Int
-  senderId       Int
-  body           String   @db.Text
-  createdAt      DateTime @default(now())
+  id                 Int      @id @default(autoincrement())
+  conversationId     Int
+  senderId           Int
+  /// Nullable: a message can be attachment-only with no text. Application
+  /// code (not the database) enforces that body and the attachment fields
+  /// below aren't both empty — see POST /conversations/:id/messages.
+  body               String?  @db.Text
+  /// The four fields below are all set together or all null — there's no
+  /// case where only some of them are populated. attachmentType is derived
+  /// server-side from the real, R2-verified mimeType at creation time
+  /// ("image" if it starts with "image/", "file" otherwise); it decides
+  /// whether the client renders an inline image or a download card.
+  attachmentKey      String?
+  attachmentName     String?
+  attachmentMimeType String?
+  attachmentSize     Int?
+  attachmentType     String?
+  createdAt          DateTime @default(now())
 
   conversation Conversation @relation(fields: [conversationId], references: [id])
   sender       User         @relation("MessageSender", fields: [senderId], references: [id])

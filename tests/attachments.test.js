@@ -137,3 +137,70 @@ describe("POST /chat/uploads", () => {
     assert.equal(res.body.url, `https://fake.r2.example/${res.body.key}`);
   });
 });
+
+describe("POST /conversations/:id/messages with an attachment", () => {
+  let alice, aliceToken;
+  let bob;
+  let conversation;
+
+  beforeEach(async () => {
+    await resetDb();
+    alice = await createUser({ email: "alice@test.com", password: "alicepass1", name: "Alice" });
+    bob = await createUser({ email: "bob@test.com", password: "bobpass1", name: "Bob" });
+    aliceToken = await login("alice@test.com", "alicepass1");
+    await makeFriends(alice, bob);
+    conversation = await makeConversation(alice, bob);
+  });
+
+  test("creates a message from an attachment with no body", async (t) => {
+    t.mock.method(S3Client.prototype, "send", async (command) => {
+      if (command.constructor.name === "HeadObjectCommand") {
+        return { ContentLength: 1000, ContentType: "image/jpeg" };
+      }
+      throw new Error(`Unexpected command ${command.constructor.name}`);
+    });
+
+    const res = await request(app)
+      .post(`/api/chat/conversations/${conversation.id}/messages`)
+      .set("Authorization", `Bearer ${aliceToken}`)
+      .send({ attachmentKey: "conversations/1/abc-photo.jpg", attachmentName: "photo.jpg" });
+
+    assert.equal(res.status, 201);
+    assert.equal(res.body.body, null);
+    assert.equal(res.body.attachmentName, "photo.jpg");
+    assert.equal(res.body.attachmentType, "image");
+    assert.equal(res.body.attachmentSize, 1000);
+  });
+
+  test("400s when neither body nor attachmentKey is present", async () => {
+    const res = await request(app)
+      .post(`/api/chat/conversations/${conversation.id}/messages`)
+      .set("Authorization", `Bearer ${aliceToken}`)
+      .send({});
+    assert.equal(res.status, 400);
+  });
+
+  test("400s when the attachment key doesn't exist on R2", async (t) => {
+    t.mock.method(S3Client.prototype, "send", async () => {
+      throw Object.assign(new Error("NotFound"), { name: "NotFound" });
+    });
+
+    const res = await request(app)
+      .post(`/api/chat/conversations/${conversation.id}/messages`)
+      .set("Authorization", `Bearer ${aliceToken}`)
+      .send({ attachmentKey: "conversations/1/missing.jpg", attachmentName: "missing.jpg" });
+
+    assert.equal(res.status, 400);
+  });
+
+  test("still supports a plain text message with no attachment", async () => {
+    const res = await request(app)
+      .post(`/api/chat/conversations/${conversation.id}/messages`)
+      .set("Authorization", `Bearer ${aliceToken}`)
+      .send({ body: "hello" });
+
+    assert.equal(res.status, 201);
+    assert.equal(res.body.body, "hello");
+    assert.equal(res.body.attachmentKey, null);
+  });
+});

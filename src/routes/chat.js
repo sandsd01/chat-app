@@ -6,7 +6,7 @@ const chatBus = require("../lib/chatBus");
 const { areFriends } = require("./friends");
 const { sendPushToUser } = require("../lib/push");
 const { readArchivedMessages } = require("../lib/drive");
-const { attachmentsConfigured, createUploadUrl } = require("../lib/attachments");
+const { attachmentsConfigured, createUploadUrl, verifyUploadedObject } = require("../lib/attachments");
 
 const router = express.Router();
 
@@ -301,17 +301,45 @@ router.post("/conversations/:id/messages", async (req, res) => {
     return res.status(403).json({ error: "You can only message accounts you're friends with" });
   }
 
-  const body = typeof req.body?.body === "string" ? req.body.body.trim() : "";
-  if (!body) {
-    return res.status(400).json({ error: "body is required" });
+  const rawBody = typeof req.body?.body === "string" ? req.body.body.trim() : "";
+  const attachmentKey = typeof req.body?.attachmentKey === "string" ? req.body.attachmentKey : null;
+  const attachmentName = typeof req.body?.attachmentName === "string" ? req.body.attachmentName : null;
+
+  if (!rawBody && !attachmentKey) {
+    return res.status(400).json({ error: "body or attachmentKey is required" });
   }
-  if (body.length > 4000) {
+  if (rawBody.length > 4000) {
     return res.status(400).json({ error: "body must be 4000 characters or fewer" });
   }
 
+  let attachmentFields = {
+    attachmentKey: null,
+    attachmentName: null,
+    attachmentMimeType: null,
+    attachmentSize: null,
+    attachmentType: null,
+  };
+  if (attachmentKey) {
+    let verified;
+    try {
+      verified = await verifyUploadedObject(attachmentKey);
+    } catch (err) {
+      return res.status(400).json({ error: err.message });
+    }
+    attachmentFields = {
+      attachmentKey,
+      attachmentName: attachmentName || attachmentKey.split("/").pop(),
+      attachmentMimeType: verified.mimeType,
+      attachmentSize: verified.size,
+      attachmentType: verified.attachmentType,
+    };
+  }
+
+  const body = rawBody || null;
+
   const message = await prisma.$transaction(async (tx) => {
     const created = await tx.message.create({
-      data: { conversationId, senderId: req.user.id, body },
+      data: { conversationId, senderId: req.user.id, body, ...attachmentFields },
     });
     await tx.conversation.update({
       where: { id: conversationId },
@@ -326,6 +354,11 @@ router.post("/conversations/:id/messages", async (req, res) => {
     senderId: message.senderId,
     body: message.body,
     createdAt: message.createdAt,
+    attachmentKey: message.attachmentKey,
+    attachmentName: message.attachmentName,
+    attachmentMimeType: message.attachmentMimeType,
+    attachmentSize: message.attachmentSize,
+    attachmentType: message.attachmentType,
   };
 
   // Deliberately not logged via src/lib/audit.js — message content doesn't
@@ -342,13 +375,20 @@ router.post("/conversations/:id/messages", async (req, res) => {
   if (!chatBus.hasSubscribers(otherUserId)) {
     prisma.user
       .findUnique({ where: { id: req.user.id }, select: { name: true, email: true } })
-      .then((sender) =>
-        sendPushToUser(otherUserId, {
+      .then((sender) => {
+        const pushBody = message.body
+          ? message.body.length > 120
+            ? `${message.body.slice(0, 117)}…`
+            : message.body
+          : message.attachmentType === "image"
+            ? "Sent a photo"
+            : `Sent a file: ${message.attachmentName}`;
+        return sendPushToUser(otherUserId, {
           title: sender?.name || sender?.email || "New message",
-          body: body.length > 120 ? `${body.slice(0, 117)}…` : body,
+          body: pushBody,
           conversationId,
-        })
-      )
+        });
+      })
       .catch((err) => console.error("Push notification failed:", err));
   }
 
