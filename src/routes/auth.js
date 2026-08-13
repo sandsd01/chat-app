@@ -205,18 +205,21 @@ router.post("/login", authLimiter, async (req, res) => {
 
   const valid = await bcrypt.compare(password, user.passwordHash);
   if (!valid) {
-    const failedLoginAttempts = user.failedLoginAttempts + 1;
-    const lockingNow = failedLoginAttempts >= MAX_FAILED_ATTEMPTS;
-
-    await prisma.user.update({
+    // Atomic increment rather than read-then-write: two concurrent wrong
+    // guesses both reading the same stale count would otherwise both write
+    // the same +1, silently losing an attempt and letting a parallelized
+    // brute force outrun MAX_FAILED_ATTEMPTS.
+    const afterIncrement = await prisma.user.update({
       where: { id: user.id },
-      data: {
-        failedLoginAttempts: lockingNow ? 0 : failedLoginAttempts,
-        lockedUntil: lockingNow ? new Date(Date.now() + LOCK_DURATION_MS) : null,
-      },
+      data: { failedLoginAttempts: { increment: 1 } },
     });
+    const lockingNow = afterIncrement.failedLoginAttempts >= MAX_FAILED_ATTEMPTS;
 
     if (lockingNow) {
+      await prisma.user.update({
+        where: { id: user.id },
+        data: { failedLoginAttempts: 0, lockedUntil: new Date(Date.now() + LOCK_DURATION_MS) },
+      });
       return res.status(423).json({
         error: "Account locked due to too many failed login attempts. Try again later.",
       });

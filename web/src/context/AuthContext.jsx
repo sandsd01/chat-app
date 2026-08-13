@@ -33,11 +33,21 @@ export function AuthProvider({ children }) {
 
   // Refresh the cached user on load so sessions stored before a field was
   // added to the user payload pick it up without needing to log out and back in.
+  // `cancelled` guards against a slow response landing after `token` has
+  // already moved on (e.g. logout, or a fast logout+login as a different
+  // account on the same tab) and overwriting the new session's user with
+  // the old one's.
   useEffect(() => {
     if (!token) return
+    let cancelled = false
     apiFetch('/auth/me', { token })
-      .then(setUser)
+      .then((freshUser) => {
+        if (!cancelled) setUser(freshUser)
+      })
       .catch(() => {})
+    return () => {
+      cancelled = true
+    }
   }, [token])
 
   async function login(email, password) {

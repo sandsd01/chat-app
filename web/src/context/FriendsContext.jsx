@@ -1,4 +1,4 @@
-import { createContext, useCallback, useContext, useEffect, useMemo, useState } from 'react'
+import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react'
 import { useAuth } from './AuthContext'
 import { useChat } from './ChatContext'
 import {
@@ -25,19 +25,36 @@ export function FriendsProvider({ children }) {
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState(null)
 
+  // refresh() is called from several places that can overlap (mount, the
+  // live "friend" event, and every action handler below) — without
+  // ordering, a slower/older request resolving after a newer one would
+  // overwrite fresh state with stale data. seqRef tags each call and only
+  // applies a response if no newer call has started since.
+  const seqRef = useRef(0)
+
+  // Rethrows after recording `error`, so an action handler's `await refresh()`
+  // (see sendRequest/acceptRequest/etc. below) fails loudly when the mutation
+  // itself succeeded but the follow-up refetch didn't — otherwise the action
+  // looked like a silent no-op: the button stops being busy, no error shows,
+  // and the request row never disappears, even though it worked server-side.
+  // The two call sites below that don't want that (mount, and the live
+  // "friend" event) catch it themselves.
   const refresh = useCallback(async () => {
     if (!token) return
+    const mySeq = ++seqRef.current
     setLoading(true)
     setError(null)
     try {
       const [friendsList, requests] = await Promise.all([listFriends(token), listRequests(token)])
+      if (mySeq !== seqRef.current) return
       setFriends(friendsList)
       setIncoming(requests.incoming)
       setOutgoing(requests.outgoing)
     } catch (err) {
-      setError(err.message)
+      if (mySeq === seqRef.current) setError(err.message)
+      throw err
     } finally {
-      setLoading(false)
+      if (mySeq === seqRef.current) setLoading(false)
     }
   }, [token])
 
@@ -48,7 +65,7 @@ export function FriendsProvider({ children }) {
       setOutgoing([])
       return
     }
-    refresh()
+    refresh().catch(() => {})
   }, [token, refresh])
 
   // Live updates: a "friend" event over the shared SSE stream (see
@@ -60,7 +77,7 @@ export function FriendsProvider({ children }) {
   useEffect(() => {
     if (!token) return
     return subscribeToFriendEvents(() => {
-      refresh()
+      refresh().catch(() => {})
     })
   }, [token, subscribeToFriendEvents, refresh])
 
