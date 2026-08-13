@@ -6,6 +6,7 @@ import { useChat } from '../context/ChatContext'
 import { useFriends } from '../context/FriendsContext'
 import { listMessages, listDriveHistory, sendMessage } from '../api/chat'
 import { useDriveBackup } from '../hooks/useDriveBackup'
+import { EmojiPicker } from '../components/EmojiPicker'
 
 const MESSAGE_PAGE_SIZE = 50
 const SCROLL_BOTTOM_THRESHOLD = 80
@@ -143,6 +144,7 @@ export function ChatPage() {
   const [driveHasMore, setDriveHasMore] = useState(false)
   const [loadingOlder, setLoadingOlder] = useState(false)
   const [draft, setDraft] = useState('')
+  const [emojiPickerOpen, setEmojiPickerOpen] = useState(false)
 
   const messagesElRef = useRef(null)
   const isAtBottomRef = useRef(true)
@@ -484,6 +486,22 @@ export function ChatPage() {
               </div>
 
               <form className="chat-composer" onSubmit={handleSend}>
+                <div className="chat-composer-emoji-wrap">
+                  <button
+                    type="button"
+                    className="chat-composer-emoji-btn"
+                    aria-label={t('chat.emojiPicker')}
+                    onClick={() => setEmojiPickerOpen((open) => !open)}
+                  >
+                    😊
+                  </button>
+                  {emojiPickerOpen && (
+                    <EmojiPicker
+                      onSelect={(emoji) => setDraft((prev) => prev + emoji)}
+                      onClose={() => setEmojiPickerOpen(false)}
+                    />
+                  )}
+                </div>
                 <input
                   type="text"
                   value={draft}
