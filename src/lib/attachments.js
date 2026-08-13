@@ -1,4 +1,30 @@
 const crypto = require("crypto");
+const { S3Client, PutObjectCommand, HeadObjectCommand, GetObjectCommand } = require("@aws-sdk/client-s3");
+// Imported as a namespace, not destructured, so tests can mock
+// presigner.getSignedUrl directly (see tests/attachments.test.js) — the same
+// reason src/lib/push.js's tests mock a method on the whole `webpush` module
+// object rather than a destructured function.
+const presigner = require("@aws-sdk/s3-request-presigner");
+
+const R2_ACCOUNT_ID = process.env.R2_ACCOUNT_ID;
+const R2_ACCESS_KEY_ID = process.env.R2_ACCESS_KEY_ID;
+const R2_SECRET_ACCESS_KEY = process.env.R2_SECRET_ACCESS_KEY;
+const R2_BUCKET_NAME = process.env.R2_BUCKET_NAME;
+
+const attachmentsConfigured = Boolean(R2_ACCOUNT_ID && R2_ACCESS_KEY_ID && R2_SECRET_ACCESS_KEY && R2_BUCKET_NAME);
+
+// Optional like Drive/Push/Google sign-in: null rather than a client built
+// from undefined credentials when unconfigured, so nothing downstream can
+// accidentally make a real network call in that state.
+const s3Client = attachmentsConfigured
+  ? new S3Client({
+      region: "auto",
+      endpoint: `https://${R2_ACCOUNT_ID}.r2.cloudflarestorage.com`,
+      credentials: { accessKeyId: R2_ACCESS_KEY_ID, secretAccessKey: R2_SECRET_ACCESS_KEY },
+    })
+  : null;
+
+const PRESIGN_TTL_SECONDS = 5 * 60;
 
 const MAX_IMAGE_BYTES = 10 * 1024 * 1024;
 const MAX_FILE_BYTES = 25 * 1024 * 1024;
@@ -45,6 +71,53 @@ function keyFor(conversationId, fileName) {
   return `conversations/${conversationId}/${crypto.randomUUID()}-${safeName}`;
 }
 
+/// Mints a presigned PUT URL for a validated upload. ContentType and
+/// ContentLength are bound into the signature, so the browser's PUT request
+/// must send matching Content-Type/Content-Length headers or R2 rejects it —
+/// this is what stops someone getting a URL for a 1KB image and then PUTting
+/// a 50MB file to it.
+async function createUploadUrl({ conversationId, fileName, mimeType, size }) {
+  const attachmentType = validateUpload({ fileName, mimeType, size });
+  const key = keyFor(conversationId, fileName);
+  const command = new PutObjectCommand({
+    Bucket: R2_BUCKET_NAME,
+    Key: key,
+    ContentType: mimeType,
+    ContentLength: size,
+  });
+  const url = await presigner.getSignedUrl(s3Client, command, { expiresIn: PRESIGN_TTL_SECONDS });
+  return { url, key, attachmentType };
+}
+
+/// Confirms an object actually exists on R2 and reads its real size/type —
+/// never trusts what a client claims after the fact, since a client could in
+/// principle skip the PUT, or overwrite the key with something else. Throws
+/// if the object is missing or exceeds the size limit for its real type.
+async function verifyUploadedObject(key) {
+  let head;
+  try {
+    head = await s3Client.send(new HeadObjectCommand({ Bucket: R2_BUCKET_NAME, Key: key }));
+  } catch {
+    throw new Error("Attachment not found — upload may not have completed");
+  }
+  const mimeType = head.ContentType || "application/octet-stream";
+  const attachmentType = attachmentTypeFor(mimeType);
+  const maxBytes = attachmentType === "image" ? MAX_IMAGE_BYTES : MAX_FILE_BYTES;
+  const size = head.ContentLength || 0;
+  if (size > maxBytes) {
+    throw new Error(`File is too large (max ${Math.round(maxBytes / (1024 * 1024))}MB)`);
+  }
+  return { size, attachmentType, mimeType };
+}
+
+/// Fresh, short-lived download link — never a permanent URL. Callers are
+/// responsible for only calling this once they've confirmed the requester is
+/// a participant of the conversation the attachment belongs to.
+async function createDownloadUrl(key) {
+  const command = new GetObjectCommand({ Bucket: R2_BUCKET_NAME, Key: key });
+  return presigner.getSignedUrl(s3Client, command, { expiresIn: PRESIGN_TTL_SECONDS });
+}
+
 module.exports = {
   MAX_IMAGE_BYTES,
   MAX_FILE_BYTES,
@@ -52,4 +125,8 @@ module.exports = {
   attachmentTypeFor,
   validateUpload,
   keyFor,
+  attachmentsConfigured,
+  createUploadUrl,
+  verifyUploadedObject,
+  createDownloadUrl,
 };

@@ -118,6 +118,21 @@ describe("Chat API", () => {
     });
   });
 
+  describe("POST /chat/uploads", () => {
+    test("503s when attachments aren't configured", async () => {
+      const conv = await request(app)
+        .post("/api/chat/conversations")
+        .set("Authorization", `Bearer ${adminToken}`)
+        .send({ userId: staffUser.id });
+
+      const res = await request(app)
+        .post("/api/chat/uploads")
+        .set("Authorization", `Bearer ${adminToken}`)
+        .send({ conversationId: conv.body.id, fileName: "photo.jpg", mimeType: "image/jpeg", size: 1000 });
+      assert.equal(res.status, 503);
+    });
+  });
+
   describe("POST /chat/conversations", () => {
     test("requires authentication", async () => {
       const res = await request(app).post("/api/chat/conversations").send({ userId: staffUser.id });

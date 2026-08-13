@@ -6,6 +6,7 @@ const chatBus = require("../lib/chatBus");
 const { areFriends } = require("./friends");
 const { sendPushToUser } = require("../lib/push");
 const { readArchivedMessages } = require("../lib/drive");
+const { attachmentsConfigured, createUploadUrl } = require("../lib/attachments");
 
 const router = express.Router();
 
@@ -80,6 +81,42 @@ router.use(authenticate);
 // Browsing every registered user by name/email is a real privacy problem
 // once signup is public, so that route was removed rather than kept as a
 // second, looser way to find people.
+
+router.post("/uploads", async (req, res) => {
+  if (!attachmentsConfigured) {
+    return res.status(503).json({ error: "File attachments are not configured" });
+  }
+
+  const conversationId = Number(req.body?.conversationId);
+  const conversation = await getConversationForParticipant(conversationId, req.user.id);
+  if (!conversation) return res.status(404).json({ error: "Conversation not found" });
+
+  const otherUserId = conversation.userAId === req.user.id ? conversation.userBId : conversation.userAId;
+  if (!(await areFriends(req.user.id, otherUserId))) {
+    return res.status(403).json({ error: "You can only message accounts you're friends with" });
+  }
+
+  const { fileName, mimeType, size } = req.body || {};
+  if (
+    typeof fileName !== "string" ||
+    !fileName ||
+    typeof mimeType !== "string" ||
+    !mimeType ||
+    !Number.isInteger(size) ||
+    size <= 0
+  ) {
+    return res.status(400).json({ error: "fileName, mimeType, and size are required" });
+  }
+
+  let result;
+  try {
+    result = await createUploadUrl({ conversationId, fileName, mimeType, size });
+  } catch (err) {
+    return res.status(400).json({ error: err.message });
+  }
+
+  res.json(result);
+});
 
 // --- Conversations ----------------------------------------------------------
 

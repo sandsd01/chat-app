@@ -1,6 +1,27 @@
-const { test, describe } = require("node:test");
+process.env.R2_ACCOUNT_ID = "test-account-id";
+process.env.R2_ACCESS_KEY_ID = "test-access-key";
+process.env.R2_SECRET_ACCESS_KEY = "test-secret-key";
+process.env.R2_BUCKET_NAME = "test-bucket";
+
+const { test, describe, beforeEach } = require("node:test");
 const assert = require("node:assert/strict");
+const request = require("supertest");
+const { S3Client } = require("@aws-sdk/client-s3");
+const presigner = require("@aws-sdk/s3-request-presigner");
+const { resetDb, createUser, makeFriends, prisma } = require("./helpers/db");
+const app = require("../src/app");
 const { validateUpload, attachmentTypeFor, keyFor, MAX_IMAGE_BYTES, MAX_FILE_BYTES } = require("../src/lib/attachments");
+
+async function login(email, password) {
+  const res = await request(app).post("/api/auth/login").send({ email, password });
+  return res.body.token;
+}
+
+async function makeConversation(userA, userB) {
+  const userAId = Math.min(userA.id, userB.id);
+  const userBId = Math.max(userA.id, userB.id);
+  return prisma.conversation.create({ data: { userAId, userBId } });
+}
 
 describe("src/lib/attachments.js#attachmentTypeFor", () => {
   test("classifies an image/* mime type as image", () => {
@@ -59,5 +80,60 @@ describe("src/lib/attachments.js#keyFor", () => {
   test("strips characters that aren't safe in an object key", () => {
     const key = keyFor(1, "my photo (final)!.jpg");
     assert.doesNotMatch(key, /[ ()!]/);
+  });
+});
+
+describe("POST /chat/uploads", () => {
+  let alice, aliceToken;
+  let bob;
+  let carol, carolToken;
+  let conversation;
+
+  beforeEach(async () => {
+    await resetDb();
+    alice = await createUser({ email: "alice@test.com", password: "alicepass1", name: "Alice" });
+    bob = await createUser({ email: "bob@test.com", password: "bobpass1", name: "Bob" });
+    carol = await createUser({ email: "carol@test.com", password: "carolpass1", name: "Carol" });
+    aliceToken = await login("alice@test.com", "alicepass1");
+    carolToken = await login("carol@test.com", "carolpass1");
+    await makeFriends(alice, bob);
+    conversation = await makeConversation(alice, bob);
+  });
+
+  test("requires authentication", async () => {
+    const res = await request(app)
+      .post("/api/chat/uploads")
+      .send({ conversationId: conversation.id, fileName: "photo.jpg", mimeType: "image/jpeg", size: 1000 });
+    assert.equal(res.status, 401);
+  });
+
+  test("404s for a conversation the caller isn't part of", async () => {
+    const res = await request(app)
+      .post("/api/chat/uploads")
+      .set("Authorization", `Bearer ${carolToken}`)
+      .send({ conversationId: conversation.id, fileName: "photo.jpg", mimeType: "image/jpeg", size: 1000 });
+    assert.equal(res.status, 404);
+  });
+
+  test("400s on a file that fails validation (too large)", async () => {
+    const res = await request(app)
+      .post("/api/chat/uploads")
+      .set("Authorization", `Bearer ${aliceToken}`)
+      .send({ conversationId: conversation.id, fileName: "photo.jpg", mimeType: "image/jpeg", size: MAX_IMAGE_BYTES + 1 });
+    assert.equal(res.status, 400);
+  });
+
+  test("returns a presigned PUT url and key for a valid request", async (t) => {
+    t.mock.method(presigner, "getSignedUrl", async (_client, command) => `https://fake.r2.example/${command.input.Key}`);
+
+    const res = await request(app)
+      .post("/api/chat/uploads")
+      .set("Authorization", `Bearer ${aliceToken}`)
+      .send({ conversationId: conversation.id, fileName: "photo.jpg", mimeType: "image/jpeg", size: 1000 });
+
+    assert.equal(res.status, 200);
+    assert.equal(res.body.attachmentType, "image");
+    assert.match(res.body.key, new RegExp(`^conversations/${conversation.id}/`));
+    assert.equal(res.body.url, `https://fake.r2.example/${res.body.key}`);
   });
 });
