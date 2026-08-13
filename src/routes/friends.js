@@ -15,8 +15,19 @@ router.use(authenticate);
 // different route entirely, or the tab may be backgrounded. So both fire.
 // `payload` is the chatBus payload, not the event name; the event name is
 // always the literal "friend".
-async function notify(userId, title, body, payload) {
-  chatBus.publish(userId, "friend", payload);
+//
+// Every call site fires this without awaiting it, so publish is wrapped in
+// its own try/catch: chatBus.publish() runs SSE subscribers' res.write()
+// synchronously, and an exception there (e.g. a write racing a just-closed
+// connection) would otherwise surface as an unhandled promise rejection —
+// unlike chat.js's own publish calls, which run inline inside an awaited
+// route handler that Express can catch, nothing here awaits this function.
+function notify(userId, title, body, payload) {
+  try {
+    chatBus.publish(userId, "friend", payload);
+  } catch (err) {
+    console.error("Friend event publish failed:", err);
+  }
   sendPushToUser(userId, { title, body }).catch((err) => console.error("Push notification failed:", err));
 }
 
