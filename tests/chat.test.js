@@ -444,6 +444,186 @@ describe("Chat API", () => {
     });
   });
 
+  describe("PATCH /chat/conversations/:id/messages/:messageId", () => {
+    async function createConversation(token, userId) {
+      return request(app)
+        .post("/api/chat/conversations")
+        .set("Authorization", `Bearer ${token}`)
+        .send({ userId });
+    }
+
+    async function sendMessage(token, conversationId, body) {
+      return request(app)
+        .post(`/api/chat/conversations/${conversationId}/messages`)
+        .set("Authorization", `Bearer ${token}`)
+        .send({ body });
+    }
+
+    test("requires authentication", async () => {
+      const res = await request(app).patch("/api/chat/conversations/1/messages/1").send({ body: "x" });
+      assert.equal(res.status, 401);
+    });
+
+    test("404 for a non-participant", async () => {
+      const conv = await createConversation(adminToken, staffUser.id);
+      const msg = await sendMessage(adminToken, conv.body.id, "original");
+      const res = await request(app)
+        .patch(`/api/chat/conversations/${conv.body.id}/messages/${msg.body.id}`)
+        .set("Authorization", `Bearer ${otherToken}`)
+        .send({ body: "edited" });
+      assert.equal(res.status, 404);
+    });
+
+    test("403 when the caller is a participant but not the sender", async () => {
+      const conv = await createConversation(adminToken, staffUser.id);
+      const msg = await sendMessage(adminToken, conv.body.id, "original");
+      const res = await request(app)
+        .patch(`/api/chat/conversations/${conv.body.id}/messages/${msg.body.id}`)
+        .set("Authorization", `Bearer ${staffToken}`)
+        .send({ body: "edited by the wrong person" });
+      assert.equal(res.status, 403);
+    });
+
+    test("400 on empty body", async () => {
+      const conv = await createConversation(adminToken, staffUser.id);
+      const msg = await sendMessage(adminToken, conv.body.id, "original");
+      const res = await request(app)
+        .patch(`/api/chat/conversations/${conv.body.id}/messages/${msg.body.id}`)
+        .set("Authorization", `Bearer ${adminToken}`)
+        .send({ body: "   " });
+      assert.equal(res.status, 400);
+    });
+
+    test("edits the body, sets editedAt, and publishes a message-edited event to both participants", async () => {
+      const conv = await createConversation(adminToken, staffUser.id);
+      const msg = await sendMessage(adminToken, conv.body.id, "original");
+
+      const staffWaiter = waitForEvent(staffUser.id, "message-edited");
+      const adminWaiter = waitForEvent(adminUser.id, "message-edited");
+
+      const res = await request(app)
+        .patch(`/api/chat/conversations/${conv.body.id}/messages/${msg.body.id}`)
+        .set("Authorization", `Bearer ${adminToken}`)
+        .send({ body: "edited text" });
+      assert.equal(res.status, 200);
+      assert.equal(res.body.body, "edited text");
+      assert.ok(res.body.editedAt);
+
+      const staffPayload = await staffWaiter;
+      const adminPayload = await adminWaiter;
+      assert.equal(staffPayload.id, msg.body.id);
+      assert.equal(staffPayload.body, "edited text");
+      assert.equal(adminPayload.id, msg.body.id);
+
+      const dbMsg = await prisma.message.findUnique({ where: { id: msg.body.id } });
+      assert.equal(dbMsg.body, "edited text");
+      assert.ok(dbMsg.editedAt);
+    });
+
+    test("404 for a nonexistent message", async () => {
+      const conv = await createConversation(adminToken, staffUser.id);
+      const res = await request(app)
+        .patch(`/api/chat/conversations/${conv.body.id}/messages/999999`)
+        .set("Authorization", `Bearer ${adminToken}`)
+        .send({ body: "edited" });
+      assert.equal(res.status, 404);
+    });
+
+    test("404 when editing an already-deleted message", async () => {
+      const conv = await createConversation(adminToken, staffUser.id);
+      const msg = await sendMessage(adminToken, conv.body.id, "original");
+      await request(app)
+        .delete(`/api/chat/conversations/${conv.body.id}/messages/${msg.body.id}`)
+        .set("Authorization", `Bearer ${adminToken}`);
+
+      const res = await request(app)
+        .patch(`/api/chat/conversations/${conv.body.id}/messages/${msg.body.id}`)
+        .set("Authorization", `Bearer ${adminToken}`)
+        .send({ body: "edited" });
+      assert.equal(res.status, 404);
+    });
+  });
+
+  describe("DELETE /chat/conversations/:id/messages/:messageId", () => {
+    async function createConversation(token, userId) {
+      return request(app)
+        .post("/api/chat/conversations")
+        .set("Authorization", `Bearer ${token}`)
+        .send({ userId });
+    }
+
+    async function sendMessage(token, conversationId, body) {
+      return request(app)
+        .post(`/api/chat/conversations/${conversationId}/messages`)
+        .set("Authorization", `Bearer ${token}`)
+        .send({ body });
+    }
+
+    test("requires authentication", async () => {
+      const res = await request(app).delete("/api/chat/conversations/1/messages/1").send({});
+      assert.equal(res.status, 401);
+    });
+
+    test("404 for a non-participant", async () => {
+      const conv = await createConversation(adminToken, staffUser.id);
+      const msg = await sendMessage(adminToken, conv.body.id, "original");
+      const res = await request(app)
+        .delete(`/api/chat/conversations/${conv.body.id}/messages/${msg.body.id}`)
+        .set("Authorization", `Bearer ${otherToken}`)
+        .send({});
+      assert.equal(res.status, 404);
+    });
+
+    test("403 when the caller is a participant but not the sender", async () => {
+      const conv = await createConversation(adminToken, staffUser.id);
+      const msg = await sendMessage(adminToken, conv.body.id, "original");
+      const res = await request(app)
+        .delete(`/api/chat/conversations/${conv.body.id}/messages/${msg.body.id}`)
+        .set("Authorization", `Bearer ${staffToken}`)
+        .send({});
+      assert.equal(res.status, 403);
+    });
+
+    test("soft-deletes: clears body, sets deletedAt, and publishes message-deleted to both participants", async () => {
+      const conv = await createConversation(adminToken, staffUser.id);
+      const msg = await sendMessage(adminToken, conv.body.id, "secret content");
+
+      const staffWaiter = waitForEvent(staffUser.id, "message-deleted");
+      const adminWaiter = waitForEvent(adminUser.id, "message-deleted");
+
+      const res = await request(app)
+        .delete(`/api/chat/conversations/${conv.body.id}/messages/${msg.body.id}`)
+        .set("Authorization", `Bearer ${adminToken}`)
+        .send({});
+      assert.equal(res.status, 200);
+      assert.equal(res.body.id, msg.body.id);
+      assert.ok(res.body.deletedAt);
+
+      const staffPayload = await staffWaiter;
+      const adminPayload = await adminWaiter;
+      assert.equal(staffPayload.id, msg.body.id);
+      assert.equal(adminPayload.id, msg.body.id);
+
+      const dbMsg = await prisma.message.findUnique({ where: { id: msg.body.id } });
+      assert.equal(dbMsg.body, null, "content must be cleared, not just flagged");
+      assert.ok(dbMsg.deletedAt);
+    });
+
+    test("404 when deleting an already-deleted message", async () => {
+      const conv = await createConversation(adminToken, staffUser.id);
+      const msg = await sendMessage(adminToken, conv.body.id, "original");
+      await request(app)
+        .delete(`/api/chat/conversations/${conv.body.id}/messages/${msg.body.id}`)
+        .set("Authorization", `Bearer ${adminToken}`);
+
+      const res = await request(app)
+        .delete(`/api/chat/conversations/${conv.body.id}/messages/${msg.body.id}`)
+        .set("Authorization", `Bearer ${adminToken}`)
+        .send({});
+      assert.equal(res.status, 404);
+    });
+  });
+
   describe("POST /chat/conversations/:id/read", () => {
     async function createConversation(token, userId) {
       return request(app)

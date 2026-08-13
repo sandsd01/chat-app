@@ -58,6 +58,18 @@ export async function uploadFileToR2(url, file) {
   if (!res.ok) throw new Error('Upload failed')
 }
 
+export function editMessage(conversationId, messageId, body, token) {
+  return apiFetch(`/chat/conversations/${conversationId}/messages/${messageId}`, {
+    method: 'PATCH',
+    body: { body },
+    token,
+  })
+}
+
+export function deleteMessage(conversationId, messageId, token) {
+  return apiFetch(`/chat/conversations/${conversationId}/messages/${messageId}`, { method: 'DELETE', token })
+}
+
 export function markRead(conversationId, token) {
   return apiFetch(`/chat/conversations/${conversationId}/read`, { method: 'POST', token })
 }

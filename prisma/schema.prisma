@@ -10,33 +10,33 @@ datasource db {
 }
 
 model User {
-  id                  Int       @id @default(autoincrement())
-  email               String    @unique
+  id                   Int       @id @default(autoincrement())
+  email                String    @unique
   /// A short, shareable code (e.g. "K7XQPM2R"), distinct from the numeric
   /// primary key on purpose: `id` is sequential and guessable (id=2 tells
   /// you id=1 exists), which is fine for internal FKs but not for something
   /// users hand out publicly to be found by. Randomly generated at creation
   /// (src/lib/publicId.js); a user may replace it with a chosen one exactly
   /// once via PATCH /api/users/me, tracked by publicIdCustomized below.
-  publicId            String    @unique
+  publicId             String    @unique
   /// Set true the moment a user spends their one-time custom publicId
   /// change (PATCH /api/users/me) — false means the value above is still
   /// the randomly generated original.
-  publicIdCustomized  Boolean   @default(false)
-  name                String?
+  publicIdCustomized   Boolean   @default(false)
+  name                 String?
   /// Nullable because a Google-only account never sets one — POST
   /// /auth/login must check for null before bcrypt.compare (comparing
   /// against null throws) and tell the caller to use Google instead.
-  passwordHash        String?
+  passwordHash         String?
   /// Google's stable per-account subject identifier ("sub" claim), set once
   /// on first Google sign-in and never changed. Distinct from checking
   /// `email` alone: Google itself may let a user change the email on their
   /// Google account, but `sub` never changes, so this is the actual link.
-  googleId            String?   @unique
-  failedLoginAttempts Int       @default(0)
-  lockedUntil         DateTime?
-  resetTokenHash      String?
-  resetTokenExpiresAt DateTime?
+  googleId             String?   @unique
+  failedLoginAttempts  Int       @default(0)
+  lockedUntil          DateTime?
+  resetTokenHash       String?
+  resetTokenExpiresAt  DateTime?
   /// Encrypted (AES-256-GCM, key from TOKEN_ENCRYPTION_KEY) Google OAuth
   /// refresh token for the drive.file scope, set only once the user opts
   /// into Drive backup (src/routes/drive.js) — separate from sign-in, which
@@ -48,7 +48,7 @@ model User {
   /// Drive (drive.file scope only sees files/folders the app itself
   /// created), cached so every sync doesn't have to search for it again.
   driveFolderId        String?
-  createdAt           DateTime  @default(now())
+  createdAt            DateTime  @default(now())
 
   conversationsAsUserA Conversation[]     @relation("ConversationUserA")
   conversationsAsUserB Conversation[]     @relation("ConversationUserB")
@@ -125,9 +125,9 @@ model Conversation {
   userBLastReadAt DateTime?
   createdAt       DateTime  @default(now())
 
-  userA    User      @relation("ConversationUserA", fields: [userAId], references: [id])
-  userB    User      @relation("ConversationUserB", fields: [userBId], references: [id])
-  messages Message[]
+  userA             User               @relation("ConversationUserA", fields: [userAId], references: [id])
+  userB             User               @relation("ConversationUserB", fields: [userBId], references: [id])
+  messages          Message[]
   driveArchiveFiles DriveArchiveFile[]
 
   @@unique([userAId, userBId])
@@ -135,13 +135,13 @@ model Conversation {
 }
 
 model Message {
-  id                 Int      @id @default(autoincrement())
+  id                 Int       @id @default(autoincrement())
   conversationId     Int
   senderId           Int
   /// Nullable: a message can be attachment-only with no text. Application
   /// code (not the database) enforces that body and the attachment fields
   /// below aren't both empty — see POST /conversations/:id/messages.
-  body               String?  @db.Text
+  body               String?   @db.Text
   /// The four fields below are all set together or all null — there's no
   /// case where only some of them are populated. attachmentType is derived
   /// server-side from the real, R2-verified mimeType at creation time
@@ -152,7 +152,16 @@ model Message {
   attachmentMimeType String?
   attachmentSize     Int?
   attachmentType     String?
-  createdAt          DateTime @default(now())
+  createdAt          DateTime  @default(now())
+  /// Set when the sender edits `body` after sending. Attachments aren't
+  /// editable, only the text — see PATCH /conversations/:id/messages/:messageId.
+  editedAt           DateTime?
+  /// Soft delete: set instead of removing the row so conversationId/senderId
+  /// stay intact for ordering, while body and every attachment field are
+  /// cleared at the same time (see DELETE .../:messageId) — a deleted
+  /// message's content isn't kept around in any form, consistent with this
+  /// app never logging message content elsewhere either.
+  deletedAt          DateTime?
 
   conversation Conversation @relation(fields: [conversationId], references: [id])
   sender       User         @relation("MessageSender", fields: [senderId], references: [id])

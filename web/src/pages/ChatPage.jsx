@@ -4,7 +4,16 @@ import { useAuth } from '../context/AuthContext'
 import { useLanguage } from '../context/LanguageContext'
 import { useChat } from '../context/ChatContext'
 import { useFriends } from '../context/FriendsContext'
-import { listMessages, listDriveHistory, sendMessage, requestUpload, uploadFileToR2, sendTyping } from '../api/chat'
+import {
+  listMessages,
+  listDriveHistory,
+  sendMessage,
+  requestUpload,
+  uploadFileToR2,
+  sendTyping,
+  editMessage,
+  deleteMessage,
+} from '../api/chat'
 import { useDriveBackup } from '../hooks/useDriveBackup'
 import { EmojiPicker } from '../components/EmojiPicker'
 
@@ -64,6 +73,8 @@ export function ChatPage() {
     connectionState,
     subscribeToConversation,
     subscribeToTyping,
+    subscribeToMessageEdited,
+    subscribeToMessageDeleted,
     markConversationRead,
     startChat,
   } = useChat()
@@ -145,6 +156,8 @@ export function ChatPage() {
   const [driveHasMore, setDriveHasMore] = useState(false)
   const [loadingOlder, setLoadingOlder] = useState(false)
   const [draft, setDraft] = useState('')
+  const [editingMessageId, setEditingMessageId] = useState(null)
+  const [editingDraft, setEditingDraft] = useState('')
   const [emojiPickerOpen, setEmojiPickerOpen] = useState(false)
   const [uploadBusy, setUploadBusy] = useState(false)
   const [uploadError, setUploadError] = useState(null)
@@ -239,6 +252,8 @@ export function ChatPage() {
   // conversation can't linger, then re-subscribe for the newly active one.
   useEffect(() => {
     setOtherTyping(false)
+    setEditingMessageId(null)
+    setEditingDraft('')
     clearTimeout(typingClearTimerRef.current)
     if (!activeConversationId) return undefined
     return subscribeToTyping(activeConversationId, () => {
@@ -247,6 +262,82 @@ export function ChatPage() {
       typingClearTimerRef.current = setTimeout(() => setOtherTyping(false), TYPING_CLEAR_MS)
     })
   }, [activeConversationId, subscribeToTyping])
+
+  useEffect(() => {
+    if (!activeConversationId) return undefined
+    return subscribeToMessageEdited(activeConversationId, (payload) => {
+      setMessages((prev) =>
+        prev.map((m) => (m.id === payload.id ? { ...m, body: payload.body, editedAt: payload.editedAt } : m))
+      )
+    })
+  }, [activeConversationId, subscribeToMessageEdited])
+
+  useEffect(() => {
+    if (!activeConversationId) return undefined
+    return subscribeToMessageDeleted(activeConversationId, (payload) => {
+      setMessages((prev) =>
+        prev.map((m) =>
+          m.id === payload.id
+            ? {
+                ...m,
+                deletedAt: payload.deletedAt,
+                body: null,
+                attachmentType: null,
+                attachmentUrl: null,
+                attachmentKey: null,
+                attachmentName: null,
+              }
+            : m
+        )
+      )
+    })
+  }, [activeConversationId, subscribeToMessageDeleted])
+
+  function startEdit(message) {
+    setEditingMessageId(message.id)
+    setEditingDraft(message.body || '')
+  }
+
+  function cancelEdit() {
+    setEditingMessageId(null)
+    setEditingDraft('')
+  }
+
+  async function saveEdit(messageId) {
+    const body = editingDraft.trim()
+    if (!body) return
+    try {
+      const updated = await editMessage(activeConversationId, messageId, body, token)
+      setMessages((prev) => prev.map((m) => (m.id === messageId ? { ...m, ...updated } : m)))
+      cancelEdit()
+    } catch (err) {
+      setMessagesError(err.message)
+    }
+  }
+
+  async function handleDelete(messageId) {
+    if (!window.confirm(t('chat.confirmDeleteMessage'))) return
+    try {
+      const updated = await deleteMessage(activeConversationId, messageId, token)
+      setMessages((prev) =>
+        prev.map((m) =>
+          m.id === messageId
+            ? {
+                ...m,
+                ...updated,
+                body: null,
+                attachmentType: null,
+                attachmentUrl: null,
+                attachmentKey: null,
+                attachmentName: null,
+              }
+            : m
+        )
+      )
+    } catch (err) {
+      setMessagesError(err.message)
+    }
+  }
 
   function notifyTyping() {
     if (!activeConversationId) return
@@ -524,32 +615,77 @@ export function ChatPage() {
                         )}
                         <div className={`chat-bubble-row ${mine ? 'mine' : 'theirs'}${m.failed ? ' failed' : ''}`}>
                           <div className="chat-bubble-wrap">
-                            <div className="chat-bubble">
-                              {m.attachmentType === 'image' && (
-                                <a href={m.attachmentUrl} target="_blank" rel="noreferrer" className="chat-attachment-image-link">
-                                  <img src={m.attachmentUrl} alt={m.attachmentName || ''} className="chat-attachment-image" />
-                                </a>
-                              )}
-                              {m.attachmentType === 'file' && (
-                                <a
-                                  href={m.attachmentUrl}
-                                  download={m.attachmentName}
-                                  target="_blank"
-                                  rel="noreferrer"
-                                  className="chat-attachment-file"
-                                >
-                                  <span className="chat-attachment-file-icon">📄</span>
-                                  <span className="chat-attachment-file-info">
-                                    <span className="chat-attachment-file-name">{m.attachmentName}</span>
-                                    <span className="chat-attachment-file-size">
-                                      {m.attachmentSize ? `${Math.round(m.attachmentSize / 1024)} KB` : ''}
+                            {m.deletedAt ? (
+                              <div className="chat-bubble deleted">
+                                <span className="chat-bubble-deleted-text">{t('chat.messageDeleted')}</span>
+                              </div>
+                            ) : editingMessageId === m.id ? (
+                              <div className="chat-bubble-edit">
+                                <input
+                                  type="text"
+                                  value={editingDraft}
+                                  onChange={(e) => setEditingDraft(e.target.value)}
+                                  maxLength={4000}
+                                  autoFocus
+                                />
+                                <div className="chat-bubble-edit-actions">
+                                  <button type="button" onClick={() => saveEdit(m.id)} disabled={!editingDraft.trim()}>
+                                    {t('chat.save')}
+                                  </button>
+                                  <button type="button" onClick={cancelEdit}>
+                                    {t('chat.cancel')}
+                                  </button>
+                                </div>
+                              </div>
+                            ) : (
+                              <div className="chat-bubble">
+                                {m.attachmentType === 'image' && (
+                                  <a href={m.attachmentUrl} target="_blank" rel="noreferrer" className="chat-attachment-image-link">
+                                    <img src={m.attachmentUrl} alt={m.attachmentName || ''} className="chat-attachment-image" />
+                                  </a>
+                                )}
+                                {m.attachmentType === 'file' && (
+                                  <a
+                                    href={m.attachmentUrl}
+                                    download={m.attachmentName}
+                                    target="_blank"
+                                    rel="noreferrer"
+                                    className="chat-attachment-file"
+                                  >
+                                    <span className="chat-attachment-file-icon">📄</span>
+                                    <span className="chat-attachment-file-info">
+                                      <span className="chat-attachment-file-name">{m.attachmentName}</span>
+                                      <span className="chat-attachment-file-size">
+                                        {m.attachmentSize ? `${Math.round(m.attachmentSize / 1024)} KB` : ''}
+                                      </span>
                                     </span>
-                                  </span>
-                                </a>
-                              )}
-                              {m.body}
-                              <span className="chat-bubble-time">{formatTime(m.createdAt, language)}</span>
-                            </div>
+                                  </a>
+                                )}
+                                {m.body}
+                                {m.editedAt && <span className="chat-bubble-edited-tag"> {t('chat.edited')}</span>}
+                                <span className="chat-bubble-time">{formatTime(m.createdAt, language)}</span>
+                              </div>
+                            )}
+                            {mine && !m.pending && !m.failed && !m.deletedAt && editingMessageId !== m.id && (
+                              <div className="chat-bubble-actions">
+                                <button
+                                  type="button"
+                                  className="chat-bubble-action-btn"
+                                  aria-label={t('chat.editMessage')}
+                                  onClick={() => startEdit(m)}
+                                >
+                                  ✏️
+                                </button>
+                                <button
+                                  type="button"
+                                  className="chat-bubble-action-btn"
+                                  aria-label={t('chat.deleteMessage')}
+                                  onClick={() => handleDelete(m.id)}
+                                >
+                                  🗑️
+                                </button>
+                              </div>
+                            )}
                             {m.failed && (
                               <div className="chat-bubble-error">
                                 <span>{t('chat.messageFailed')}</span>

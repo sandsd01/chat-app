@@ -414,6 +414,73 @@ router.post("/conversations/:id/messages", async (req, res) => {
   res.status(201).json(ssePayload);
 });
 
+async function getOwnMessage(conversationId, messageId, userId) {
+  if (!Number.isInteger(messageId)) return { status: 404 };
+  const message = await prisma.message.findUnique({ where: { id: messageId } });
+  if (!message || message.conversationId !== conversationId || message.deletedAt) {
+    return { status: 404 };
+  }
+  if (message.senderId !== userId) return { status: 403 };
+  return { message };
+}
+
+router.patch("/conversations/:id/messages/:messageId", async (req, res) => {
+  const conversationId = Number(req.params.id);
+  const conversation = await getConversationForParticipant(conversationId, req.user.id);
+  if (!conversation) return res.status(404).json({ error: "Conversation not found" });
+
+  const lookup = await getOwnMessage(conversationId, Number(req.params.messageId), req.user.id);
+  if (lookup.status === 404) return res.status(404).json({ error: "Message not found" });
+  if (lookup.status === 403) return res.status(403).json({ error: "You can only edit your own messages" });
+
+  const body = typeof req.body?.body === "string" ? req.body.body.trim() : "";
+  if (!body) return res.status(400).json({ error: "body is required" });
+  if (body.length > 4000) return res.status(400).json({ error: "body must be 4000 characters or fewer" });
+
+  const updated = await prisma.message.update({
+    where: { id: lookup.message.id },
+    data: { body, editedAt: new Date() },
+  });
+
+  const payload = { id: updated.id, conversationId, body: updated.body, editedAt: updated.editedAt };
+  chatBus.publish(conversation.userAId, "message-edited", payload);
+  chatBus.publish(conversation.userBId, "message-edited", payload);
+
+  res.json(payload);
+});
+
+router.delete("/conversations/:id/messages/:messageId", async (req, res) => {
+  const conversationId = Number(req.params.id);
+  const conversation = await getConversationForParticipant(conversationId, req.user.id);
+  if (!conversation) return res.status(404).json({ error: "Conversation not found" });
+
+  const lookup = await getOwnMessage(conversationId, Number(req.params.messageId), req.user.id);
+  if (lookup.status === 404) return res.status(404).json({ error: "Message not found" });
+  if (lookup.status === 403) return res.status(403).json({ error: "You can only delete your own messages" });
+
+  // Content is cleared, not just flagged: a deleted message shouldn't keep
+  // its body/attachment sitting in the row indefinitely just because the
+  // row itself stays around for conversationId/senderId/ordering.
+  const updated = await prisma.message.update({
+    where: { id: lookup.message.id },
+    data: {
+      deletedAt: new Date(),
+      body: null,
+      attachmentKey: null,
+      attachmentName: null,
+      attachmentMimeType: null,
+      attachmentSize: null,
+      attachmentType: null,
+    },
+  });
+
+  const payload = { id: updated.id, conversationId, deletedAt: updated.deletedAt };
+  chatBus.publish(conversation.userAId, "message-deleted", payload);
+  chatBus.publish(conversation.userBId, "message-deleted", payload);
+
+  res.json(payload);
+});
+
 // Transient, non-persisted presence signal: no DB write, just a chatBus
 // event to the other participant. The frontend fires this throttled while
 // the composer has focus and clears its own "is typing" indicator on a

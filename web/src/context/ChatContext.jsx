@@ -4,6 +4,21 @@ import { listConversations, startConversation, markRead as markReadApi, getStrea
 
 const ChatContext = createContext(null)
 
+// Shared by every per-conversation event map below (typing, message-edited,
+// message-deleted) — each is otherwise an identical "Map<conversationId,
+// Set<callback>>" registry, just fed by a different SSE event name.
+function subscribeViaMap(map, key, callback) {
+  if (!map.has(key)) map.set(key, new Set())
+  map.get(key).add(callback)
+  return () => {
+    map.get(key)?.delete(callback)
+  }
+}
+
+function dispatchViaMap(map, key, payload) {
+  map.get(key)?.forEach((cb) => cb(payload))
+}
+
 // Reconnect backoff: 1s, 2s, 4s, 8s, 16s, capped at 30s. After a handful of
 // failed attempts we report `down` instead of `reconnecting` so the banner
 // can escalate to the danger palette per the design spec.
@@ -26,6 +41,8 @@ export function ChatProvider({ children }) {
 
   const listenersRef = useRef(new Map()) // conversationId -> Set<(payload) => void>
   const typingListenersRef = useRef(new Map()) // conversationId -> Set<(payload) => void>
+  const editedListenersRef = useRef(new Map()) // conversationId -> Set<(payload) => void>
+  const deletedListenersRef = useRef(new Map()) // conversationId -> Set<(payload) => void>
   const friendListenersRef = useRef(new Set())
   const esRef = useRef(null)
   const attemptRef = useRef(0)
@@ -66,26 +83,27 @@ export function ChatProvider({ children }) {
   // Thread views subscribe here to receive live messages for the
   // conversation they have open, without the context needing to know
   // anything about the currently-mounted route/component.
-  const subscribeToConversation = useCallback((conversationId, callback) => {
-    const map = listenersRef.current
-    if (!map.has(conversationId)) map.set(conversationId, new Set())
-    map.get(conversationId).add(callback)
-    return () => {
-      map.get(conversationId)?.delete(callback)
-    }
-  }, [])
+  const subscribeToConversation = useCallback(
+    (conversationId, callback) => subscribeViaMap(listenersRef.current, conversationId, callback),
+    []
+  )
 
-  // Same shape as subscribeToConversation, kept as a separate map because a
-  // "typing" event isn't message-shaped — mixing it into the message
-  // listeners would make every existing callback branch on event type.
-  const subscribeToTyping = useCallback((conversationId, callback) => {
-    const map = typingListenersRef.current
-    if (!map.has(conversationId)) map.set(conversationId, new Set())
-    map.get(conversationId).add(callback)
-    return () => {
-      map.get(conversationId)?.delete(callback)
-    }
-  }, [])
+  // Separate maps per event rather than one and a type tag on the payload —
+  // each keeps its callback contract single-shaped (a typing payload isn't a
+  // message, an edit isn't a delete), so a subscriber never has to branch on
+  // event type to know what it received.
+  const subscribeToTyping = useCallback(
+    (conversationId, callback) => subscribeViaMap(typingListenersRef.current, conversationId, callback),
+    []
+  )
+  const subscribeToMessageEdited = useCallback(
+    (conversationId, callback) => subscribeViaMap(editedListenersRef.current, conversationId, callback),
+    []
+  )
+  const subscribeToMessageDeleted = useCallback(
+    (conversationId, callback) => subscribeViaMap(deletedListenersRef.current, conversationId, callback),
+    []
+  )
 
   // FriendsContext hooks in here rather than opening a second SSE
   // connection/ticket of its own — the server forwards a "friend" event over
@@ -122,6 +140,18 @@ export function ChatProvider({ children }) {
       return next
     })
   }, [refreshConversations])
+
+  // Keeps the conversation-list preview from showing stale/deleted text
+  // after an edit or delete of whichever message it was last showing —
+  // patches only when the edited/deleted id is actually the cached preview.
+  const updateCachedLastMessage = useCallback((conversationId, messageId, patch) => {
+    setConversations((prev) =>
+      prev.map((c) => {
+        if (c.id !== conversationId || c.lastMessage?.id !== messageId) return c
+        return { ...c, lastMessage: { ...c.lastMessage, ...patch } }
+      })
+    )
+  }, [])
 
   // `scheduleReconnect` and `connect` call each other; a ref sidesteps the
   // definition-order/exhaustive-deps tangle a direct useCallback reference
@@ -170,7 +200,25 @@ export function ChatProvider({ children }) {
     es.addEventListener('typing', (evt) => {
       try {
         const payload = JSON.parse(evt.data)
-        typingListenersRef.current.get(payload.conversationId)?.forEach((cb) => cb(payload))
+        dispatchViaMap(typingListenersRef.current, payload.conversationId, payload)
+      } catch {
+        // ignore malformed payloads
+      }
+    })
+    es.addEventListener('message-edited', (evt) => {
+      try {
+        const payload = JSON.parse(evt.data)
+        dispatchViaMap(editedListenersRef.current, payload.conversationId, payload)
+        updateCachedLastMessage(payload.conversationId, payload.id, { body: payload.body, editedAt: payload.editedAt })
+      } catch {
+        // ignore malformed payloads
+      }
+    })
+    es.addEventListener('message-deleted', (evt) => {
+      try {
+        const payload = JSON.parse(evt.data)
+        dispatchViaMap(deletedListenersRef.current, payload.conversationId, payload)
+        updateCachedLastMessage(payload.conversationId, payload.id, { body: null, deletedAt: payload.deletedAt })
       } catch {
         // ignore malformed payloads
       }
@@ -188,7 +236,7 @@ export function ChatProvider({ children }) {
       if (esRef.current === es) esRef.current = null
       scheduleReconnect()
     }
-  }, [token, handleIncomingMessage, scheduleReconnect])
+  }, [token, handleIncomingMessage, updateCachedLastMessage, scheduleReconnect])
   connectRef.current = connect
 
   useEffect(() => {
@@ -262,6 +310,8 @@ export function ChatProvider({ children }) {
       refreshConversations,
       subscribeToConversation,
       subscribeToTyping,
+      subscribeToMessageEdited,
+      subscribeToMessageDeleted,
       subscribeToFriendEvents,
       markConversationRead,
       startChat,
@@ -275,6 +325,8 @@ export function ChatProvider({ children }) {
       refreshConversations,
       subscribeToConversation,
       subscribeToTyping,
+      subscribeToMessageEdited,
+      subscribeToMessageDeleted,
       subscribeToFriendEvents,
       markConversationRead,
       startChat,

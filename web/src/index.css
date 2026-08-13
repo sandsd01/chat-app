@@ -961,6 +961,57 @@ td:has(+ td) {
   opacity: 0.75;
 }
 
+.chat-bubble.deleted {
+  background: transparent;
+  border: 1px dashed var(--border);
+  color: var(--text-muted);
+  font-style: italic;
+}
+
+.chat-bubble-edited-tag {
+  font-size: 11px;
+  opacity: 0.7;
+}
+
+.chat-bubble-edit {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 8px;
+  border-radius: 16px;
+  border: 1px solid var(--border);
+  background: var(--bg-raised);
+}
+
+.chat-bubble-edit-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+/* Hidden until the row is hovered/focused so the bubble list doesn't stay
+   cluttered with icon buttons on every one of the caller's own messages. */
+.chat-bubble-actions {
+  display: flex;
+  gap: 4px;
+  margin-top: 2px;
+  opacity: 0;
+  transition: opacity 0.1s;
+}
+
+.chat-bubble-row:hover .chat-bubble-actions,
+.chat-bubble-actions:focus-within {
+  opacity: 1;
+}
+
+.chat-bubble-action-btn {
+  background: none;
+  border: none;
+  cursor: pointer;
+  font-size: 13px;
+  padding: 2px 4px;
+}
+
 /* A failed send stays visible in the thread rather than vanishing — the
    outline and the retry text both carry the failure, since the bubble
    underneath is still solid accent-coloured. */
