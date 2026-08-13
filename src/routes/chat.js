@@ -6,6 +6,7 @@ const chatBus = require("../lib/chatBus");
 const { areFriends } = require("./friends");
 const { sendPushToUser } = require("../lib/push");
 const { readArchivedMessages } = require("../lib/drive");
+const { attachmentsConfigured, createUploadUrl, verifyUploadedObject, createDownloadUrl } = require("../lib/attachments");
 
 const router = express.Router();
 
@@ -80,6 +81,42 @@ router.use(authenticate);
 // Browsing every registered user by name/email is a real privacy problem
 // once signup is public, so that route was removed rather than kept as a
 // second, looser way to find people.
+
+router.post("/uploads", async (req, res) => {
+  if (!attachmentsConfigured) {
+    return res.status(503).json({ error: "File attachments are not configured" });
+  }
+
+  const conversationId = Number(req.body?.conversationId);
+  const conversation = await getConversationForParticipant(conversationId, req.user.id);
+  if (!conversation) return res.status(404).json({ error: "Conversation not found" });
+
+  const otherUserId = conversation.userAId === req.user.id ? conversation.userBId : conversation.userAId;
+  if (!(await areFriends(req.user.id, otherUserId))) {
+    return res.status(403).json({ error: "You can only message accounts you're friends with" });
+  }
+
+  const { fileName, mimeType, size } = req.body || {};
+  if (
+    typeof fileName !== "string" ||
+    !fileName ||
+    typeof mimeType !== "string" ||
+    !mimeType ||
+    !Number.isInteger(size) ||
+    size <= 0
+  ) {
+    return res.status(400).json({ error: "fileName, mimeType, and size are required" });
+  }
+
+  let result;
+  try {
+    result = await createUploadUrl({ conversationId, fileName, mimeType, size });
+  } catch (err) {
+    return res.status(400).json({ error: err.message });
+  }
+
+  res.json(result);
+});
 
 // --- Conversations ----------------------------------------------------------
 
@@ -212,9 +249,20 @@ router.get("/conversations/:id/messages", async (req, res) => {
   });
 
   const hasMore = rows.length > limit;
-  const data = rows.slice(0, limit);
+  const page = rows.slice(0, limit);
 
-  res.json({ data, hasMore, nextBefore: hasMore ? data[data.length - 1].id : null });
+  // Presigned GET URLs are minted fresh on every read rather than stored —
+  // never a permanent link, and this route already only reaches rows for a
+  // conversation the caller is confirmed a participant of (see
+  // getConversationForParticipant above).
+  const data = await Promise.all(
+    page.map(async (m) => ({
+      ...m,
+      attachmentUrl: m.attachmentKey ? await createDownloadUrl(m.attachmentKey) : null,
+    }))
+  );
+
+  res.json({ data, hasMore, nextBefore: hasMore ? page[page.length - 1].id : null });
 });
 
 // Falls back to the CALLER's own Google Drive archive once Postgres has
@@ -264,17 +312,45 @@ router.post("/conversations/:id/messages", async (req, res) => {
     return res.status(403).json({ error: "You can only message accounts you're friends with" });
   }
 
-  const body = typeof req.body?.body === "string" ? req.body.body.trim() : "";
-  if (!body) {
-    return res.status(400).json({ error: "body is required" });
+  const rawBody = typeof req.body?.body === "string" ? req.body.body.trim() : "";
+  const attachmentKey = typeof req.body?.attachmentKey === "string" ? req.body.attachmentKey : null;
+  const attachmentName = typeof req.body?.attachmentName === "string" ? req.body.attachmentName : null;
+
+  if (!rawBody && !attachmentKey) {
+    return res.status(400).json({ error: "body or attachmentKey is required" });
   }
-  if (body.length > 4000) {
+  if (rawBody.length > 4000) {
     return res.status(400).json({ error: "body must be 4000 characters or fewer" });
   }
 
+  let attachmentFields = {
+    attachmentKey: null,
+    attachmentName: null,
+    attachmentMimeType: null,
+    attachmentSize: null,
+    attachmentType: null,
+  };
+  if (attachmentKey) {
+    let verified;
+    try {
+      verified = await verifyUploadedObject(attachmentKey);
+    } catch (err) {
+      return res.status(400).json({ error: err.message });
+    }
+    attachmentFields = {
+      attachmentKey,
+      attachmentName: attachmentName || attachmentKey.split("/").pop(),
+      attachmentMimeType: verified.mimeType,
+      attachmentSize: verified.size,
+      attachmentType: verified.attachmentType,
+    };
+  }
+
+  const body = rawBody || null;
+
   const message = await prisma.$transaction(async (tx) => {
     const created = await tx.message.create({
-      data: { conversationId, senderId: req.user.id, body },
+      data: { conversationId, senderId: req.user.id, body, ...attachmentFields },
     });
     await tx.conversation.update({
       where: { id: conversationId },
@@ -289,12 +365,20 @@ router.post("/conversations/:id/messages", async (req, res) => {
     senderId: message.senderId,
     body: message.body,
     createdAt: message.createdAt,
+    attachmentKey: message.attachmentKey,
+    attachmentName: message.attachmentName,
+    attachmentMimeType: message.attachmentMimeType,
+    attachmentSize: message.attachmentSize,
+    attachmentType: message.attachmentType,
   };
+
+  const attachmentUrl = payload.attachmentKey ? await createDownloadUrl(payload.attachmentKey) : null;
+  const ssePayload = { ...payload, attachmentUrl };
 
   // Deliberately not logged via src/lib/audit.js — message content doesn't
   // belong in an audit trail.
-  chatBus.publish(conversation.userAId, "message", payload);
-  chatBus.publish(conversation.userBId, "message", payload);
+  chatBus.publish(conversation.userAId, "message", ssePayload);
+  chatBus.publish(conversation.userBId, "message", ssePayload);
 
   // Push is the fallback for "not connected," not a duplicate of the SSE
   // event — skip it entirely when the recipient already has a live stream
@@ -305,17 +389,24 @@ router.post("/conversations/:id/messages", async (req, res) => {
   if (!chatBus.hasSubscribers(otherUserId)) {
     prisma.user
       .findUnique({ where: { id: req.user.id }, select: { name: true, email: true } })
-      .then((sender) =>
-        sendPushToUser(otherUserId, {
+      .then((sender) => {
+        const pushBody = message.body
+          ? message.body.length > 120
+            ? `${message.body.slice(0, 117)}…`
+            : message.body
+          : message.attachmentType === "image"
+            ? "Sent a photo"
+            : `Sent a file: ${message.attachmentName}`;
+        return sendPushToUser(otherUserId, {
           title: sender?.name || sender?.email || "New message",
-          body: body.length > 120 ? `${body.slice(0, 117)}…` : body,
+          body: pushBody,
           conversationId,
-        })
-      )
+        });
+      })
       .catch((err) => console.error("Push notification failed:", err));
   }
 
-  res.status(201).json(payload);
+  res.status(201).json(ssePayload);
 });
 
 router.post("/conversations/:id/read", async (req, res) => {

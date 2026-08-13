@@ -172,6 +172,12 @@ async function archiveUserConversations(userId) {
           senderId: m.senderId,
           senderName: m.sender.name || m.sender.email,
           body: m.body,
+          // Attachment bytes are never backed up here — out of scope for
+          // now (see the design spec). Recording that one existed at
+          // least keeps the archived history from looking like a message
+          // silently vanished.
+          hasAttachment: Boolean(m.attachmentKey),
+          attachmentName: m.attachmentName || null,
           createdAt: m.createdAt,
         })
       )
@@ -266,7 +272,15 @@ async function readArchivedMessages(userId, conversationId, { before, limit = 50
   const page = eligible
     .slice(Math.max(0, eligible.length - limit))
     .reverse()
-    .map((m) => ({ id: m.id, conversationId, senderId: m.senderId, body: m.body, createdAt: m.createdAt }));
+    .map((m) => ({
+      id: m.id,
+      conversationId,
+      senderId: m.senderId,
+      body: m.body,
+      hasAttachment: m.hasAttachment || false,
+      attachmentName: m.attachmentName || null,
+      createdAt: m.createdAt,
+    }));
 
   return { data: page, hasMore, nextBefore: hasMore ? page[page.length - 1].id : null };
 }

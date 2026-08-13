@@ -308,6 +308,34 @@ describe("Google Drive backup", () => {
       const second = await archiveUserConversations(alice.id);
       assert.deepEqual(second, { messagesArchived: 0, filesUpdated: 0 });
     });
+
+    test("records hasAttachment/attachmentName for a message with an attachment", async (t) => {
+      const fakeDrive = installFakeDrive(t);
+      await prisma.user.update({
+        where: { id: alice.id },
+        data: { driveRefreshTokenEnc: encryptSecret("refresh-token"), driveConnectedAt: new Date() },
+      });
+      const conversation = await makeConversation(alice, bob);
+      await prisma.message.create({
+        data: {
+          conversationId: conversation.id,
+          senderId: alice.id,
+          body: null,
+          attachmentKey: "conversations/1/photo.jpg",
+          attachmentName: "photo.jpg",
+          attachmentMimeType: "image/jpeg",
+          attachmentSize: 1000,
+          attachmentType: "image",
+        },
+      });
+
+      await archiveUserConversations(alice.id);
+
+      const files = [...fakeDrive.values()].filter((f) => f.mimeType === "text/plain");
+      const lines = files[0].content.trim().split("\n").map((l) => JSON.parse(l));
+      assert.equal(lines[0].hasAttachment, true);
+      assert.equal(lines[0].attachmentName, "photo.jpg");
+    });
   });
 
   describe("src/lib/drive.js#pruneArchivedMessages", () => {
@@ -434,6 +462,34 @@ describe("Google Drive backup", () => {
         [sent[0].id]
       );
       assert.equal(thirdPage.nextBefore, null);
+    });
+
+    test("surfaces hasAttachment/attachmentName for an archived-then-pruned attachment message", async (t) => {
+      installFakeDrive(t);
+      await prisma.user.update({
+        where: { id: alice.id },
+        data: { driveRefreshTokenEnc: encryptSecret("refresh-token"), driveConnectedAt: new Date() },
+      });
+      const conversation = await makeConversation(alice, bob);
+      await prisma.message.create({
+        data: {
+          conversationId: conversation.id,
+          senderId: alice.id,
+          body: null,
+          attachmentKey: "conversations/1/photo.jpg",
+          attachmentName: "photo.jpg",
+          attachmentMimeType: "image/jpeg",
+          attachmentSize: 1000,
+          attachmentType: "image",
+        },
+      });
+
+      await archiveUserConversations(alice.id);
+      await prisma.message.deleteMany({ where: { conversationId: conversation.id } });
+
+      const result = await readArchivedMessages(alice.id, conversation.id);
+      assert.equal(result.data[0].hasAttachment, true);
+      assert.equal(result.data[0].attachmentName, "photo.jpg");
     });
   });
 

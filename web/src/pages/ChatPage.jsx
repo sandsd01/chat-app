@@ -4,7 +4,7 @@ import { useAuth } from '../context/AuthContext'
 import { useLanguage } from '../context/LanguageContext'
 import { useChat } from '../context/ChatContext'
 import { useFriends } from '../context/FriendsContext'
-import { listMessages, listDriveHistory, sendMessage } from '../api/chat'
+import { listMessages, listDriveHistory, sendMessage, requestUpload, uploadFileToR2 } from '../api/chat'
 import { useDriveBackup } from '../hooks/useDriveBackup'
 import { EmojiPicker } from '../components/EmojiPicker'
 
@@ -145,6 +145,9 @@ export function ChatPage() {
   const [loadingOlder, setLoadingOlder] = useState(false)
   const [draft, setDraft] = useState('')
   const [emojiPickerOpen, setEmojiPickerOpen] = useState(false)
+  const [uploadBusy, setUploadBusy] = useState(false)
+  const [uploadError, setUploadError] = useState(null)
+  const fileInputRef = useRef(null)
 
   const messagesElRef = useRef(null)
   const isAtBottomRef = useRef(true)
@@ -268,7 +271,7 @@ export function ChatPage() {
 
   async function attemptSend(conversationId, body, tempId) {
     try {
-      const real = await sendMessage(conversationId, body, token)
+      const real = await sendMessage(conversationId, { body }, token)
       setMessages((prev) => {
         if (prev.some((m) => m.id === real.id)) return prev.filter((m) => m.id !== tempId)
         return prev.map((m) => (m.id === tempId ? real : m))
@@ -296,6 +299,31 @@ export function ChatPage() {
     isAtBottomRef.current = true
     requestAnimationFrame(scrollToBottom)
     attemptSend(activeConversationId, body, tempId)
+  }
+
+  async function handleFileSelected(e) {
+    const file = e.target.files?.[0]
+    e.target.value = '' // allow re-selecting the same file later
+    if (!file || !activeConversationId) return
+
+    setUploadError(null)
+    setUploadBusy(true)
+    try {
+      const { url, key } = await requestUpload(
+        activeConversationId,
+        { fileName: file.name, mimeType: file.type || 'application/octet-stream', size: file.size },
+        token
+      )
+      await uploadFileToR2(url, file)
+      const real = await sendMessage(activeConversationId, { attachmentKey: key, attachmentName: file.name }, token)
+      setMessages((prev) => [...prev, real])
+      isAtBottomRef.current = true
+      requestAnimationFrame(scrollToBottom)
+    } catch (err) {
+      setUploadError(err.message)
+    } finally {
+      setUploadBusy(false)
+    }
   }
 
   function handleRetry(tempId) {
@@ -462,6 +490,28 @@ export function ChatPage() {
                         <div className={`chat-bubble-row ${mine ? 'mine' : 'theirs'}${m.failed ? ' failed' : ''}`}>
                           <div className="chat-bubble-wrap">
                             <div className="chat-bubble">
+                              {m.attachmentType === 'image' && (
+                                <a href={m.attachmentUrl} target="_blank" rel="noreferrer" className="chat-attachment-image-link">
+                                  <img src={m.attachmentUrl} alt={m.attachmentName || ''} className="chat-attachment-image" />
+                                </a>
+                              )}
+                              {m.attachmentType === 'file' && (
+                                <a
+                                  href={m.attachmentUrl}
+                                  download={m.attachmentName}
+                                  target="_blank"
+                                  rel="noreferrer"
+                                  className="chat-attachment-file"
+                                >
+                                  <span className="chat-attachment-file-icon">📄</span>
+                                  <span className="chat-attachment-file-info">
+                                    <span className="chat-attachment-file-name">{m.attachmentName}</span>
+                                    <span className="chat-attachment-file-size">
+                                      {m.attachmentSize ? `${Math.round(m.attachmentSize / 1024)} KB` : ''}
+                                    </span>
+                                  </span>
+                                </a>
+                              )}
                               {m.body}
                               <span className="chat-bubble-time">{formatTime(m.createdAt, language)}</span>
                             </div>
@@ -485,6 +535,7 @@ export function ChatPage() {
                 )}
               </div>
 
+              {uploadError && <p className="error">{uploadError}</p>}
               <form className="chat-composer" onSubmit={handleSend}>
                 <div className="chat-composer-emoji-wrap">
                   <button
@@ -502,6 +553,22 @@ export function ChatPage() {
                     />
                   )}
                 </div>
+                <input
+                  type="file"
+                  ref={fileInputRef}
+                  className="chat-composer-file-input"
+                  onChange={handleFileSelected}
+                  disabled={uploadBusy}
+                />
+                <button
+                  type="button"
+                  className="chat-composer-attach-btn"
+                  aria-label={t('chat.attachFile')}
+                  disabled={uploadBusy}
+                  onClick={() => fileInputRef.current?.click()}
+                >
+                  {uploadBusy ? '…' : '📎'}
+                </button>
                 <input
                   type="text"
                   value={draft}

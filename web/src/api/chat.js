@@ -33,12 +33,29 @@ export function listDriveHistory(conversationId, { before, limit } = {}, token) 
   return apiFetch(`/chat/conversations/${conversationId}/messages/drive-history${qs ? `?${qs}` : ''}`, { token })
 }
 
-export function sendMessage(conversationId, body, token) {
+export function sendMessage(conversationId, { body, attachmentKey, attachmentName } = {}, token) {
   return apiFetch(`/chat/conversations/${conversationId}/messages`, {
     method: 'POST',
-    body: { body },
+    body: { body, attachmentKey, attachmentName },
     token,
   })
+}
+
+export function requestUpload(conversationId, { fileName, mimeType, size }, token) {
+  return apiFetch('/chat/uploads', {
+    method: 'POST',
+    body: { conversationId, fileName, mimeType, size },
+    token,
+  })
+}
+
+// PUTs directly to R2 — not through apiFetch, since this isn't a /api call
+// and doesn't take a bearer token (the presigned URL itself is the auth).
+// Content-Type must match what was sent to requestUpload(), since it's
+// bound into the presigned URL's signature.
+export async function uploadFileToR2(url, file) {
+  const res = await fetch(url, { method: 'PUT', headers: { 'Content-Type': file.type }, body: file })
+  if (!res.ok) throw new Error('Upload failed')
 }
 
 export function markRead(conversationId, token) {
