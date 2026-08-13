@@ -66,7 +66,7 @@ export function AccountPage() {
         body: { currentPassword, newPassword },
         token,
       })
-      setMessage('Password updated.')
+      setMessage(t('account.passwordUpdated'))
       setCurrentPassword('')
       setNewPassword('')
     } catch (err) {

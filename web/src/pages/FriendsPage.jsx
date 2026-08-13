@@ -232,7 +232,12 @@ export function FriendsPage() {
                 type="button"
                 className="btn-secondary"
                 disabled={busyId === f.friendshipId}
-                onClick={() => runAction(f.friendshipId, () => removeFriend(f.otherUser.id))}
+                onClick={() => {
+                  const name = f.otherUser.name || f.otherUser.email
+                  if (window.confirm(t('friends.confirmRemove', { name }))) {
+                    runAction(f.friendshipId, () => removeFriend(f.otherUser.id))
+                  }
+                }}
               >
                 {t('friends.remove')}
               </button>
@@ -240,7 +245,12 @@ export function FriendsPage() {
                 type="button"
                 className="btn-secondary-danger"
                 disabled={busyId === f.friendshipId}
-                onClick={() => runAction(f.friendshipId, () => blockUser(f.otherUser.id))}
+                onClick={() => {
+                  const name = f.otherUser.name || f.otherUser.email
+                  if (window.confirm(t('friends.confirmBlock', { name }))) {
+                    runAction(f.friendshipId, () => blockUser(f.otherUser.id))
+                  }
+                }}
               >
                 {t('friends.block')}
               </button>

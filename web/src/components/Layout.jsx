@@ -18,14 +18,24 @@ export function Layout() {
 
   return (
     <div className="layout">
-      <nav className="navbar">
+      <nav className="navbar" aria-label={t('nav.mainNavigation')}>
         <NavLink to="/chat" className={({isActive}) => isActive ? "active" : undefined}>
           {t('nav.chat')}
-          {unreadTotal > 0 && <span className="chat-nav-badge">{unreadTotal > 99 ? '99+' : unreadTotal}</span>}
+          {unreadTotal > 0 && (
+            <span className="chat-nav-badge" role="status" aria-live="polite">
+              <span aria-hidden="true">{unreadTotal > 99 ? '99+' : unreadTotal}</span>
+              <span className="sr-only">{t('nav.unreadCount', { count: unreadTotal })}</span>
+            </span>
+          )}
         </NavLink>
         <NavLink to="/friends" className={({isActive}) => isActive ? "active" : undefined}>
           {t('nav.friends')}
-          {incomingCount > 0 && <span className="chat-nav-badge">{incomingCount > 99 ? '99+' : incomingCount}</span>}
+          {incomingCount > 0 && (
+            <span className="chat-nav-badge" role="status" aria-live="polite">
+              <span aria-hidden="true">{incomingCount > 99 ? '99+' : incomingCount}</span>
+              <span className="sr-only">{t('nav.incomingCount', { count: incomingCount })}</span>
+            </span>
+          )}
         </NavLink>
         <span className="spacer" />
         <select

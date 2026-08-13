@@ -2,6 +2,9 @@ export const translations = {
   en: {
     'nav.chat': 'Chat',
     'nav.friends': 'Friends',
+    'nav.mainNavigation': 'Main navigation',
+    'nav.unreadCount': '{count} unread messages',
+    'nav.incomingCount': '{count} incoming friend requests',
     'nav.logout': 'Logout',
 
     'common.loading': 'Loading…',
@@ -75,6 +78,7 @@ export const translations = {
     'account.currentPassword': 'Current password',
     'account.newPassword': 'New password',
     'account.updatePassword': 'Update password',
+    'account.passwordUpdated': 'Password updated.',
 
     'chat.title': 'Messages',
     'chat.searchPlaceholder': 'Search friends',
@@ -139,10 +143,15 @@ export const translations = {
     'friends.message': 'Message',
     'friends.remove': 'Remove',
     'friends.block': 'Block',
+    'friends.confirmRemove': 'Remove {name} as a friend? You can send a new request later.',
+    'friends.confirmBlock': "Block {name}? They won't be able to message or add you until you unblock them.",
   },
   th: {
     'nav.chat': 'แชท',
     'nav.friends': 'เพื่อน',
+    'nav.mainNavigation': 'เมนูหลัก',
+    'nav.unreadCount': 'มีข้อความยังไม่ได้อ่าน {count} ข้อความ',
+    'nav.incomingCount': 'มีคำขอเป็นเพื่อน {count} รายการ',
     'nav.logout': 'ออกจากระบบ',
 
     'common.loading': 'กำลังโหลด…',
@@ -216,6 +225,7 @@ export const translations = {
     'account.currentPassword': 'รหัสผ่านปัจจุบัน',
     'account.newPassword': 'รหัสผ่านใหม่',
     'account.updatePassword': 'อัปเดตรหัสผ่าน',
+    'account.passwordUpdated': 'อัปเดตรหัสผ่านเรียบร้อยแล้ว',
 
     'chat.title': 'ข้อความ',
     'chat.searchPlaceholder': 'ค้นหาเพื่อน',
@@ -280,5 +290,7 @@ export const translations = {
     'friends.message': 'ส่งข้อความ',
     'friends.remove': 'ลบเพื่อน',
     'friends.block': 'บล็อก',
+    'friends.confirmRemove': 'ลบ {name} ออกจากเพื่อนใช่ไหม คุณสามารถส่งคำขอใหม่ได้ภายหลัง',
+    'friends.confirmBlock': 'บล็อก {name} ใช่ไหม จะไม่สามารถส่งข้อความหรือขอเป็นเพื่อนกับคุณได้จนกว่าคุณจะปลดบล็อก',
   },
 }

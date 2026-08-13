@@ -757,6 +757,21 @@ td:has(+ td) {
 /* Nav gets the same badge, smaller, and inverted when the link itself is
    already an accent-filled active pill so the badge doesn't disappear into
    its own background. */
+/* Visually hidden but still reachable by screen readers — used for text
+   that would be redundant on-screen (the badge already shows the number)
+   but is needed for the aria-live announcement to make sense on its own. */
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+
 .chat-nav-badge {
   display: inline-flex;
   align-items: center;
