@@ -25,6 +25,7 @@ export function ChatProvider({ children }) {
   const [connectionState, setConnectionState] = useState('connecting')
 
   const listenersRef = useRef(new Map()) // conversationId -> Set<(payload) => void>
+  const typingListenersRef = useRef(new Map()) // conversationId -> Set<(payload) => void>
   const friendListenersRef = useRef(new Set())
   const esRef = useRef(null)
   const attemptRef = useRef(0)
@@ -67,6 +68,18 @@ export function ChatProvider({ children }) {
   // anything about the currently-mounted route/component.
   const subscribeToConversation = useCallback((conversationId, callback) => {
     const map = listenersRef.current
+    if (!map.has(conversationId)) map.set(conversationId, new Set())
+    map.get(conversationId).add(callback)
+    return () => {
+      map.get(conversationId)?.delete(callback)
+    }
+  }, [])
+
+  // Same shape as subscribeToConversation, kept as a separate map because a
+  // "typing" event isn't message-shaped — mixing it into the message
+  // listeners would make every existing callback branch on event type.
+  const subscribeToTyping = useCallback((conversationId, callback) => {
+    const map = typingListenersRef.current
     if (!map.has(conversationId)) map.set(conversationId, new Set())
     map.get(conversationId).add(callback)
     return () => {
@@ -150,6 +163,14 @@ export function ChatProvider({ children }) {
     es.addEventListener('message', (evt) => {
       try {
         handleIncomingMessage(JSON.parse(evt.data))
+      } catch {
+        // ignore malformed payloads
+      }
+    })
+    es.addEventListener('typing', (evt) => {
+      try {
+        const payload = JSON.parse(evt.data)
+        typingListenersRef.current.get(payload.conversationId)?.forEach((cb) => cb(payload))
       } catch {
         // ignore malformed payloads
       }
@@ -240,6 +261,7 @@ export function ChatProvider({ children }) {
       unreadTotal,
       refreshConversations,
       subscribeToConversation,
+      subscribeToTyping,
       subscribeToFriendEvents,
       markConversationRead,
       startChat,
@@ -252,6 +274,7 @@ export function ChatProvider({ children }) {
       unreadTotal,
       refreshConversations,
       subscribeToConversation,
+      subscribeToTyping,
       subscribeToFriendEvents,
       markConversationRead,
       startChat,

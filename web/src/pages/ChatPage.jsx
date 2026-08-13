@@ -4,7 +4,7 @@ import { useAuth } from '../context/AuthContext'
 import { useLanguage } from '../context/LanguageContext'
 import { useChat } from '../context/ChatContext'
 import { useFriends } from '../context/FriendsContext'
-import { listMessages, listDriveHistory, sendMessage, requestUpload, uploadFileToR2 } from '../api/chat'
+import { listMessages, listDriveHistory, sendMessage, requestUpload, uploadFileToR2, sendTyping } from '../api/chat'
 import { useDriveBackup } from '../hooks/useDriveBackup'
 import { EmojiPicker } from '../components/EmojiPicker'
 
@@ -63,6 +63,7 @@ export function ChatPage() {
     error: conversationsError,
     connectionState,
     subscribeToConversation,
+    subscribeToTyping,
     markConversationRead,
     startChat,
   } = useChat()
@@ -152,6 +153,16 @@ export function ChatPage() {
   const messagesElRef = useRef(null)
   const isAtBottomRef = useRef(true)
 
+  // -- Typing indicator ------------------------------------------------------
+  // Transient presence only: no history, no persistence. "Other is typing"
+  // clears itself on a timeout rather than waiting for a "stopped typing"
+  // event, since the backend doesn't publish one (see src/routes/chat.js).
+  const [otherTyping, setOtherTyping] = useState(false)
+  const typingClearTimerRef = useRef(null)
+  const lastTypingSentAtRef = useRef(0)
+  const TYPING_CLEAR_MS = 3000
+  const TYPING_SEND_THROTTLE_MS = 2000
+
   const scrollToBottom = useCallback(() => {
     const el = messagesElRef.current
     if (el) el.scrollTop = el.scrollHeight
@@ -223,6 +234,30 @@ export function ChatPage() {
       }
     })
   }, [activeConversationId, subscribeToConversation, markConversationRead, user.id, scrollToBottom])
+
+  // Reset when switching threads so a stale indicator from the previous
+  // conversation can't linger, then re-subscribe for the newly active one.
+  useEffect(() => {
+    setOtherTyping(false)
+    clearTimeout(typingClearTimerRef.current)
+    if (!activeConversationId) return undefined
+    return subscribeToTyping(activeConversationId, () => {
+      setOtherTyping(true)
+      clearTimeout(typingClearTimerRef.current)
+      typingClearTimerRef.current = setTimeout(() => setOtherTyping(false), TYPING_CLEAR_MS)
+    })
+  }, [activeConversationId, subscribeToTyping])
+
+  function notifyTyping() {
+    if (!activeConversationId) return
+    const now = Date.now()
+    if (now - lastTypingSentAtRef.current < TYPING_SEND_THROTTLE_MS) return
+    lastTypingSentAtRef.current = now
+    sendTyping(activeConversationId, token).catch(() => {
+      // Best-effort presence signal — a failed send just means the other
+      // side doesn't see "typing…" this time, nothing to recover from.
+    })
+  }
 
   // Postgres first, then — once it's exhausted — this account's own Drive
   // archive for this conversation, using the oldest message currently on
@@ -535,6 +570,10 @@ export function ChatPage() {
                 )}
               </div>
 
+              <div className="chat-typing-indicator" aria-live="polite">
+                {otherTyping && t('chat.typingIndicator', { name: threadHeaderName })}
+              </div>
+
               {uploadError && <p className="error">{uploadError}</p>}
               <form className="chat-composer" onSubmit={handleSend}>
                 <div className="chat-composer-emoji-wrap">
@@ -572,7 +611,10 @@ export function ChatPage() {
                 <input
                   type="text"
                   value={draft}
-                  onChange={(e) => setDraft(e.target.value)}
+                  onChange={(e) => {
+                    setDraft(e.target.value)
+                    notifyTyping()
+                  }}
                   placeholder={t('chat.composerPlaceholder')}
                   maxLength={4000}
                 />

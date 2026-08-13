@@ -414,6 +414,22 @@ router.post("/conversations/:id/messages", async (req, res) => {
   res.status(201).json(ssePayload);
 });
 
+// Transient, non-persisted presence signal: no DB write, just a chatBus
+// event to the other participant. The frontend fires this throttled while
+// the composer has focus and clears its own "is typing" indicator on a
+// short client-side timeout if no further event arrives, so there's no
+// matching "stopped typing" event to publish here.
+router.post("/conversations/:id/typing", async (req, res) => {
+  const conversationId = Number(req.params.id);
+  const conversation = await getConversationForParticipant(conversationId, req.user.id);
+  if (!conversation) return res.status(404).json({ error: "Conversation not found" });
+
+  const otherUserId = conversation.userAId === req.user.id ? conversation.userBId : conversation.userAId;
+  chatBus.publish(otherUserId, "typing", { conversationId, userId: req.user.id });
+
+  res.status(204).end();
+});
+
 router.post("/conversations/:id/read", async (req, res) => {
   const conversationId = Number(req.params.id);
   const conversation = await getConversationForParticipant(conversationId, req.user.id);

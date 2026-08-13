@@ -4,6 +4,22 @@ const http = require("node:http");
 const request = require("supertest");
 const { resetDb, createUser, makeFriends, prisma } = require("./helpers/db");
 const app = require("../src/app");
+const chatBus = require("../src/lib/chatBus");
+
+function waitForEvent(userId, eventName, timeoutMs = 500) {
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => {
+      unsubscribe();
+      reject(new Error(`Timed out waiting for "${eventName}" event`));
+    }, timeoutMs);
+    const unsubscribe = chatBus.subscribe(userId, (event, payload) => {
+      if (event !== eventName) return;
+      clearTimeout(timer);
+      unsubscribe();
+      resolve(payload);
+    });
+  });
+}
 
 async function login(email, password) {
   const res = await request(app).post("/api/auth/login").send({ email, password });
@@ -503,6 +519,48 @@ describe("Chat API", () => {
         .get("/api/chat/conversations")
         .set("Authorization", `Bearer ${staffToken}`);
       assert.equal(afterStaffList.body.find((c) => c.id === conv.body.id).unreadCount, 0);
+    });
+  });
+
+  describe("POST /chat/conversations/:id/typing", () => {
+    async function createConversation(token, userId) {
+      return request(app)
+        .post("/api/chat/conversations")
+        .set("Authorization", `Bearer ${token}`)
+        .send({ userId });
+    }
+
+    test("requires authentication", async () => {
+      const res = await request(app).post("/api/chat/conversations/1/typing").send({});
+      assert.equal(res.status, 401);
+    });
+
+    test("404 for a non-participant", async () => {
+      const conv = await createConversation(adminToken, staffUser.id);
+      const res = await request(app)
+        .post(`/api/chat/conversations/${conv.body.id}/typing`)
+        .set("Authorization", `Bearer ${otherToken}`)
+        .send({});
+      assert.equal(res.status, 404);
+    });
+
+    test("publishes a typing event to the other participant, not the caller", async () => {
+      const conv = await createConversation(adminToken, staffUser.id);
+
+      const staffWaiter = waitForEvent(staffUser.id, "typing");
+      const adminWaiter = waitForEvent(adminUser.id, "typing", 200).catch((err) => err);
+
+      const res = await request(app)
+        .post(`/api/chat/conversations/${conv.body.id}/typing`)
+        .set("Authorization", `Bearer ${adminToken}`)
+        .send({});
+      assert.equal(res.status, 204);
+
+      const payload = await staffWaiter;
+      assert.equal(payload.conversationId, conv.body.id);
+      assert.equal(payload.userId, adminUser.id);
+
+      assert.ok((await adminWaiter) instanceof Error, "the caller must not receive their own typing event");
     });
   });
 

@@ -62,9 +62,8 @@ export function markRead(conversationId, token) {
   return apiFetch(`/chat/conversations/${conversationId}/read`, { method: 'POST', token })
 }
 
-export function searchUsers(q, token) {
-  const params = new URLSearchParams({ q })
-  return apiFetch(`/chat/users?${params.toString()}`, { token })
+export function sendTyping(conversationId, token) {
+  return apiFetch(`/chat/conversations/${conversationId}/typing`, { method: 'POST', token })
 }
 
 export function getStreamTicket(token) {

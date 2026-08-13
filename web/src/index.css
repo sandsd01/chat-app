@@ -992,6 +992,15 @@ td:has(+ td) {
   background: var(--danger-bg);
 }
 
+.chat-typing-indicator {
+  flex-shrink: 0;
+  min-height: 20px;
+  padding: 0 16px;
+  font-size: 12px;
+  font-style: italic;
+  color: var(--text-muted);
+}
+
 .chat-composer {
   flex-shrink: 0;
   display: flex;
