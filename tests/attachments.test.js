@@ -204,3 +204,49 @@ describe("POST /conversations/:id/messages with an attachment", () => {
     assert.equal(res.body.attachmentKey, null);
   });
 });
+
+describe("GET /conversations/:id/messages with an attachment", () => {
+  test("includes a freshly presigned attachmentUrl for a message with an attachment", async (t) => {
+    await resetDb();
+    const alice = await createUser({ email: "alice@test.com", password: "alicepass1", name: "Alice" });
+    const bob = await createUser({ email: "bob@test.com", password: "bobpass1", name: "Bob" });
+    const aliceToken = await login("alice@test.com", "alicepass1");
+    await makeFriends(alice, bob);
+    const conversation = await makeConversation(alice, bob);
+
+    t.mock.method(S3Client.prototype, "send", async () => ({ ContentLength: 1000, ContentType: "image/jpeg" }));
+    t.mock.method(presigner, "getSignedUrl", async (_client, command) => `https://fake.r2.example/${command.input.Key}`);
+
+    await request(app)
+      .post(`/api/chat/conversations/${conversation.id}/messages`)
+      .set("Authorization", `Bearer ${aliceToken}`)
+      .send({ attachmentKey: "conversations/1/abc-photo.jpg", attachmentName: "photo.jpg" });
+
+    const res = await request(app)
+      .get(`/api/chat/conversations/${conversation.id}/messages`)
+      .set("Authorization", `Bearer ${aliceToken}`);
+
+    assert.equal(res.status, 200);
+    assert.equal(res.body.data[0].attachmentUrl, "https://fake.r2.example/conversations/1/abc-photo.jpg");
+  });
+
+  test("attachmentUrl is null for a plain text message", async () => {
+    await resetDb();
+    const alice = await createUser({ email: "alice@test.com", password: "alicepass1", name: "Alice" });
+    const bob = await createUser({ email: "bob@test.com", password: "bobpass1", name: "Bob" });
+    const aliceToken = await login("alice@test.com", "alicepass1");
+    await makeFriends(alice, bob);
+    const conversation = await makeConversation(alice, bob);
+
+    await request(app)
+      .post(`/api/chat/conversations/${conversation.id}/messages`)
+      .set("Authorization", `Bearer ${aliceToken}`)
+      .send({ body: "hello" });
+
+    const res = await request(app)
+      .get(`/api/chat/conversations/${conversation.id}/messages`)
+      .set("Authorization", `Bearer ${aliceToken}`);
+
+    assert.equal(res.body.data[0].attachmentUrl, null);
+  });
+});

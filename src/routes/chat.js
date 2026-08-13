@@ -6,7 +6,7 @@ const chatBus = require("../lib/chatBus");
 const { areFriends } = require("./friends");
 const { sendPushToUser } = require("../lib/push");
 const { readArchivedMessages } = require("../lib/drive");
-const { attachmentsConfigured, createUploadUrl, verifyUploadedObject } = require("../lib/attachments");
+const { attachmentsConfigured, createUploadUrl, verifyUploadedObject, createDownloadUrl } = require("../lib/attachments");
 
 const router = express.Router();
 
@@ -249,9 +249,20 @@ router.get("/conversations/:id/messages", async (req, res) => {
   });
 
   const hasMore = rows.length > limit;
-  const data = rows.slice(0, limit);
+  const page = rows.slice(0, limit);
 
-  res.json({ data, hasMore, nextBefore: hasMore ? data[data.length - 1].id : null });
+  // Presigned GET URLs are minted fresh on every read rather than stored —
+  // never a permanent link, and this route already only reaches rows for a
+  // conversation the caller is confirmed a participant of (see
+  // getConversationForParticipant above).
+  const data = await Promise.all(
+    page.map(async (m) => ({
+      ...m,
+      attachmentUrl: m.attachmentKey ? await createDownloadUrl(m.attachmentKey) : null,
+    }))
+  );
+
+  res.json({ data, hasMore, nextBefore: hasMore ? page[page.length - 1].id : null });
 });
 
 // Falls back to the CALLER's own Google Drive archive once Postgres has
@@ -361,10 +372,13 @@ router.post("/conversations/:id/messages", async (req, res) => {
     attachmentType: message.attachmentType,
   };
 
+  const attachmentUrl = payload.attachmentKey ? await createDownloadUrl(payload.attachmentKey) : null;
+  const ssePayload = { ...payload, attachmentUrl };
+
   // Deliberately not logged via src/lib/audit.js — message content doesn't
   // belong in an audit trail.
-  chatBus.publish(conversation.userAId, "message", payload);
-  chatBus.publish(conversation.userBId, "message", payload);
+  chatBus.publish(conversation.userAId, "message", ssePayload);
+  chatBus.publish(conversation.userBId, "message", ssePayload);
 
   // Push is the fallback for "not connected," not a duplicate of the SSE
   // event — skip it entirely when the recipient already has a live stream
@@ -392,7 +406,7 @@ router.post("/conversations/:id/messages", async (req, res) => {
       .catch((err) => console.error("Push notification failed:", err));
   }
 
-  res.status(201).json(payload);
+  res.status(201).json(ssePayload);
 });
 
 router.post("/conversations/:id/read", async (req, res) => {
