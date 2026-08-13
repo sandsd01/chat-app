@@ -163,7 +163,7 @@ describe("POST /conversations/:id/messages with an attachment", () => {
     const res = await request(app)
       .post(`/api/chat/conversations/${conversation.id}/messages`)
       .set("Authorization", `Bearer ${aliceToken}`)
-      .send({ attachmentKey: "conversations/1/abc-photo.jpg", attachmentName: "photo.jpg" });
+      .send({ attachmentKey: `conversations/${conversation.id}/abc-photo.jpg`, attachmentName: "photo.jpg" });
 
     assert.equal(res.status, 201);
     assert.equal(res.body.body, null);
@@ -188,9 +188,26 @@ describe("POST /conversations/:id/messages with an attachment", () => {
     const res = await request(app)
       .post(`/api/chat/conversations/${conversation.id}/messages`)
       .set("Authorization", `Bearer ${aliceToken}`)
-      .send({ attachmentKey: "conversations/1/missing.jpg", attachmentName: "missing.jpg" });
+      .send({ attachmentKey: `conversations/${conversation.id}/missing.jpg`, attachmentName: "missing.jpg" });
 
     assert.equal(res.status, 400);
+  });
+
+  test("400s when an attachment key belongs to another conversation", async (t) => {
+    let headRequested = false;
+    t.mock.method(S3Client.prototype, "send", async () => {
+      headRequested = true;
+      return { ContentLength: 1000, ContentType: "image/jpeg" };
+    });
+
+    const res = await request(app)
+      .post(`/api/chat/conversations/${conversation.id}/messages`)
+      .set("Authorization", `Bearer ${aliceToken}`)
+      .send({ attachmentKey: `conversations/${conversation.id + 1}/other-chat-photo.jpg` });
+
+    assert.equal(res.status, 400);
+    assert.match(res.body.error, /doesn't belong to this conversation/);
+    assert.equal(headRequested, false);
   });
 
   test("still supports a plain text message with no attachment", async () => {
@@ -220,14 +237,14 @@ describe("GET /conversations/:id/messages with an attachment", () => {
     await request(app)
       .post(`/api/chat/conversations/${conversation.id}/messages`)
       .set("Authorization", `Bearer ${aliceToken}`)
-      .send({ attachmentKey: "conversations/1/abc-photo.jpg", attachmentName: "photo.jpg" });
+      .send({ attachmentKey: `conversations/${conversation.id}/abc-photo.jpg`, attachmentName: "photo.jpg" });
 
     const res = await request(app)
       .get(`/api/chat/conversations/${conversation.id}/messages`)
       .set("Authorization", `Bearer ${aliceToken}`);
 
     assert.equal(res.status, 200);
-    assert.equal(res.body.data[0].attachmentUrl, "https://fake.r2.example/conversations/1/abc-photo.jpg");
+    assert.equal(res.body.data[0].attachmentUrl, `https://fake.r2.example/conversations/${conversation.id}/abc-photo.jpg`);
   });
 
   test("attachmentUrl is null for a plain text message", async () => {

@@ -331,6 +331,11 @@ router.post("/conversations/:id/messages", async (req, res) => {
     attachmentType: null,
   };
   if (attachmentKey) {
+    const expectedKeyPrefix = `conversations/${conversationId}/`;
+    if (!attachmentKey.startsWith(expectedKeyPrefix)) {
+      return res.status(400).json({ error: "Attachment doesn't belong to this conversation" });
+    }
+
     let verified;
     try {
       verified = await verifyUploadedObject(attachmentKey);
