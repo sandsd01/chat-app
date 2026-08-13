@@ -69,6 +69,13 @@ describe("POST /auth/signup", () => {
     assert.equal(res.status, 400);
   });
 
+  test("rejects an invalid email format", async () => {
+    const res = await request(app)
+      .post("/api/auth/signup")
+      .send({ email: "notanemail", password: "newbiepass1" });
+    assert.equal(res.status, 400);
+  });
+
   test("409s on a duplicate email", async () => {
     await createUser({ email: "dup@test.com", password: "duppass1" });
     const res = await request(app)

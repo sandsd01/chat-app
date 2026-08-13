@@ -14,6 +14,7 @@ const router = express.Router();
 const MAX_FAILED_ATTEMPTS = 5;
 const LOCK_DURATION_MS = 15 * 60 * 1000;
 const RESET_TOKEN_EXPIRY_MS = 30 * 60 * 1000;
+const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
 function hashToken(token) {
   return crypto.createHash("sha256").update(token).digest("hex");
@@ -169,6 +170,9 @@ router.post("/signup", authLimiter, async (req, res) => {
   if (!email || !password) {
     return res.status(400).json({ error: "email and password are required" });
   }
+  if (!EMAIL_RE.test(email)) {
+    return res.status(400).json({ error: "email is not a valid email address" });
+  }
   if (password.length < 8) {
     return res.status(400).json({ error: "password must be at least 8 characters" });
   }
@@ -312,7 +316,7 @@ router.post("/forgot-password", authLimiter, async (req, res) => {
   res.json(genericResponse);
 });
 
-router.post("/reset-password", async (req, res) => {
+router.post("/reset-password", authLimiter, async (req, res) => {
   const { email, token, newPassword } = req.body || {};
   if (!email || !token || !newPassword) {
     return res.status(400).json({ error: "email, token, and newPassword are required" });
