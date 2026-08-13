@@ -149,6 +149,19 @@ describe("GET /auth/me", () => {
     assert.equal(res.body.name, "Alice");
     assert.equal(res.body.passwordHash, undefined);
   });
+
+  test("reports publicIdCustomized so the client knows whether the one-time change is still available", async () => {
+    await createUser({ email: "alice@test.com", password: "alicepass1", name: "Alice" });
+    const login = await request(app)
+      .post("/api/auth/login")
+      .send({ email: "alice@test.com", password: "alicepass1" });
+
+    const res = await request(app)
+      .get("/api/auth/me")
+      .set("Authorization", `Bearer ${login.body.token}`);
+
+    assert.equal(res.body.publicIdCustomized, false);
+  });
 });
 
 describe("PATCH /auth/password", () => {
