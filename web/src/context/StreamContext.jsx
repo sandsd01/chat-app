@@ -33,6 +33,13 @@ export function StreamProvider({ children }) {
   const attemptRef = useRef(0)
   const retryTimerRef = useRef(null)
   const stoppedRef = useRef(true)
+  // Bumped by the token-change effect's cleanup, independent of stoppedRef:
+  // stoppedRef gets reset to false again as soon as the new effect run
+  // starts, so an old connect() still resuming from an in-flight ticket
+  // fetch would otherwise pass that check and open an EventSource with a
+  // stale ticket for the previous session. Each connect() call captures the
+  // epoch it started under and re-checks it after every await.
+  const epochRef = useRef(0)
 
   const subscribe = useCallback((eventName, callback) => {
     const map = listenersRef.current
@@ -58,16 +65,17 @@ export function StreamProvider({ children }) {
   }, [])
 
   const connect = useCallback(async () => {
+    const myEpoch = epochRef.current
     if (stoppedRef.current) return
     setConnectionState((s) => (s === 'connected' ? s : 'reconnecting'))
     let ticket
     try {
       ;({ ticket } = await getStreamTicket(token))
     } catch {
-      scheduleReconnect()
+      if (myEpoch === epochRef.current) scheduleReconnect()
       return
     }
-    if (stoppedRef.current) return
+    if (stoppedRef.current || myEpoch !== epochRef.current) return
 
     const es = new EventSource(`/api/chat/stream?ticket=${encodeURIComponent(ticket)}`)
     esRef.current = es
@@ -114,6 +122,7 @@ export function StreamProvider({ children }) {
 
     return () => {
       stoppedRef.current = true
+      epochRef.current += 1
       clearTimeout(retryTimerRef.current)
       esRef.current?.close()
       esRef.current = null
