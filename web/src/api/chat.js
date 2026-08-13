@@ -21,6 +21,13 @@ export function listMessages(conversationId, { before, limit } = {}, token) {
   return apiFetch(`/chat/conversations/${conversationId}/messages${qs ? `?${qs}` : ''}`, { token })
 }
 
+export function searchMessages(conversationId, { q, before, limit } = {}, token) {
+  const params = new URLSearchParams({ q })
+  if (before !== undefined && before !== null) params.set('before', String(before))
+  if (limit !== undefined && limit !== null) params.set('limit', String(limit))
+  return apiFetch(`/chat/conversations/${conversationId}/messages/search?${params.toString()}`, { token })
+}
+
 // Falls back to the caller's own Google Drive archive once
 // GET /chat/conversations/:id/messages has run out of Postgres rows — see
 // CLAUDE.md. Same {data, hasMore, nextBefore} shape as listMessages, so

@@ -270,6 +270,55 @@ router.get("/conversations/:id/messages", async (req, res) => {
   res.json({ data, hasMore, nextBefore: hasMore ? page[page.length - 1].id : null });
 });
 
+// Same cursor/shape convention as the route above, scoped down to messages
+// whose body matches `q`. A plain case-insensitive `contains` rather than a
+// Postgres full-text index/tsvector column — this app has no evidence yet
+// that per-conversation message volume needs anything beyond a substring
+// scan, and a tsvector column is real schema surface to add speculatively.
+// `contains` on a null `body` never matches, so soft-deleted (body cleared)
+// and attachment-only messages are excluded from results with no extra
+// filter needed.
+router.get("/conversations/:id/messages/search", async (req, res) => {
+  const conversationId = Number(req.params.id);
+  const conversation = await getConversationForParticipant(conversationId, req.user.id);
+  if (!conversation) return res.status(404).json({ error: "Conversation not found" });
+
+  const q = typeof req.query.q === "string" ? req.query.q.trim() : "";
+  if (!q) return res.status(400).json({ error: "q is required" });
+
+  const limit = Math.min(100, Math.max(1, Number.parseInt(req.query.limit, 10) || 50));
+
+  let before;
+  if (req.query.before !== undefined && req.query.before !== "") {
+    before = Number(req.query.before);
+    if (!Number.isInteger(before)) {
+      return res.status(400).json({ error: "before must be a message id" });
+    }
+  }
+
+  const rows = await prisma.message.findMany({
+    where: {
+      conversationId,
+      body: { contains: q, mode: "insensitive" },
+      ...(before !== undefined ? { id: { lt: before } } : {}),
+    },
+    orderBy: [{ createdAt: "desc" }, { id: "desc" }],
+    take: limit + 1,
+  });
+
+  const hasMore = rows.length > limit;
+  const page = rows.slice(0, limit);
+
+  const data = await Promise.all(
+    page.map(async (m) => ({
+      ...m,
+      attachmentUrl: m.attachmentKey ? await createDownloadUrl(m.attachmentKey) : null,
+    }))
+  );
+
+  res.json({ data, hasMore, nextBefore: hasMore ? page[page.length - 1].id : null });
+});
+
 // Falls back to the CALLER's own Google Drive archive once Postgres has
 // nothing older than `before` left — a message only leaves Postgres once
 // every participant has archived it (src/lib/drive.js#pruneArchivedMessages),

@@ -847,6 +847,45 @@ td:has(+ td) {
   font-size: 16px;
 }
 
+.chat-thread-header-spacer {
+  flex: 1;
+}
+
+.chat-thread-search-btn {
+  flex-shrink: 0;
+  min-width: var(--tap);
+  min-height: var(--tap);
+  background: none;
+  border: none;
+  cursor: pointer;
+  font-size: 16px;
+}
+
+.chat-search-bar {
+  flex-shrink: 0;
+  padding: 8px 16px;
+  border-bottom: 1px solid var(--border);
+  background: var(--bg-raised);
+}
+
+.chat-search-result-row {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 10px 4px;
+  border-bottom: 1px solid var(--border);
+}
+
+.chat-search-result-meta {
+  font-size: 12px;
+  color: var(--text-muted);
+}
+
+.chat-search-result-body {
+  font-size: 14px;
+  word-break: break-word;
+}
+
 .chat-stream-banner {
   flex-shrink: 0;
   display: flex;

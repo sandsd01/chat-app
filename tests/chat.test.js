@@ -383,6 +383,81 @@ describe("Chat API", () => {
     });
   });
 
+  describe("GET /chat/conversations/:id/messages/search", () => {
+    async function createConversation(token, userId) {
+      return request(app)
+        .post("/api/chat/conversations")
+        .set("Authorization", `Bearer ${token}`)
+        .send({ userId });
+    }
+
+    async function sendMessage(token, conversationId, body) {
+      return request(app)
+        .post(`/api/chat/conversations/${conversationId}/messages`)
+        .set("Authorization", `Bearer ${token}`)
+        .send({ body });
+    }
+
+    test("requires authentication", async () => {
+      const res = await request(app).get("/api/chat/conversations/1/messages/search?q=hi");
+      assert.equal(res.status, 401);
+    });
+
+    test("404 for a non-participant", async () => {
+      const conv = await createConversation(adminToken, staffUser.id);
+      const res = await request(app)
+        .get(`/api/chat/conversations/${conv.body.id}/messages/search?q=hi`)
+        .set("Authorization", `Bearer ${otherToken}`);
+      assert.equal(res.status, 404);
+    });
+
+    test("400 when q is missing or blank", async () => {
+      const conv = await createConversation(adminToken, staffUser.id);
+
+      const missing = await request(app)
+        .get(`/api/chat/conversations/${conv.body.id}/messages/search`)
+        .set("Authorization", `Bearer ${adminToken}`);
+      assert.equal(missing.status, 400);
+
+      const blank = await request(app)
+        .get(`/api/chat/conversations/${conv.body.id}/messages/search?q=%20%20`)
+        .set("Authorization", `Bearer ${adminToken}`);
+      assert.equal(blank.status, 400);
+    });
+
+    test("matches case-insensitively, scoped to this conversation only, newest match first", async () => {
+      const conv = await createConversation(adminToken, staffUser.id);
+      const otherConv = await createConversation(staffToken, otherUser.id);
+
+      await sendMessage(adminToken, conv.body.id, "let's grab Pizza tonight");
+      await sendMessage(staffToken, conv.body.id, "sure, what time?");
+      await sendMessage(adminToken, conv.body.id, "pizza at 7 works");
+      await sendMessage(staffToken, otherConv.body.id, "unrelated pizza message in a different thread");
+
+      const res = await request(app)
+        .get(`/api/chat/conversations/${conv.body.id}/messages/search?q=pizza`)
+        .set("Authorization", `Bearer ${adminToken}`);
+      assert.equal(res.status, 200);
+      assert.equal(res.body.data.length, 2);
+      assert.equal(res.body.data[0].body, "pizza at 7 works");
+      assert.equal(res.body.data[1].body, "let's grab Pizza tonight");
+    });
+
+    test("excludes a soft-deleted message even if it used to match", async () => {
+      const conv = await createConversation(adminToken, staffUser.id);
+      const msg = await sendMessage(adminToken, conv.body.id, "the secret word is banana");
+      await request(app)
+        .delete(`/api/chat/conversations/${conv.body.id}/messages/${msg.body.id}`)
+        .set("Authorization", `Bearer ${adminToken}`);
+
+      const res = await request(app)
+        .get(`/api/chat/conversations/${conv.body.id}/messages/search?q=banana`)
+        .set("Authorization", `Bearer ${adminToken}`);
+      assert.equal(res.status, 200);
+      assert.equal(res.body.data.length, 0);
+    });
+  });
+
   describe("POST /chat/conversations/:id/messages", () => {
     async function createConversation(token, userId) {
       return request(app)

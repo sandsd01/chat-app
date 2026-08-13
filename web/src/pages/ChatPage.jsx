@@ -13,6 +13,7 @@ import {
   sendTyping,
   editMessage,
   deleteMessage,
+  searchMessages,
 } from '../api/chat'
 import { useDriveBackup } from '../hooks/useDriveBackup'
 import { EmojiPicker } from '../components/EmojiPicker'
@@ -165,6 +166,42 @@ export function ChatPage() {
 
   const messagesElRef = useRef(null)
   const isAtBottomRef = useRef(true)
+
+  // -- In-thread search -------------------------------------------------------
+  // A separate result list rather than trying to scroll/highlight a match
+  // inside the already-loaded thread: older matches may not be loaded (or
+  // may only exist in Drive) at all, so "jump to it in place" isn't always
+  // possible. Debounced, and scoped to whichever conversation is open.
+  const [searchOpen, setSearchOpen] = useState(false)
+  const [searchQuery, setSearchQuery] = useState('')
+  const [searchResults, setSearchResults] = useState(null)
+  const [searchLoading, setSearchLoading] = useState(false)
+  const [searchError, setSearchError] = useState(null)
+  const SEARCH_DEBOUNCE_MS = 300
+
+  useEffect(() => {
+    setSearchOpen(false)
+    setSearchQuery('')
+    setSearchResults(null)
+    setSearchError(null)
+  }, [activeConversationId])
+
+  useEffect(() => {
+    const q = searchQuery.trim()
+    if (!searchOpen || !q) {
+      setSearchResults(null)
+      setSearchError(null)
+      return undefined
+    }
+    setSearchLoading(true)
+    const timer = setTimeout(() => {
+      searchMessages(activeConversationId, { q, limit: 50 }, token)
+        .then((res) => setSearchResults(res.data))
+        .catch((err) => setSearchError(err.message))
+        .finally(() => setSearchLoading(false))
+    }, SEARCH_DEBOUNCE_MS)
+    return () => clearTimeout(timer)
+  }, [searchOpen, searchQuery, activeConversationId, token])
 
   // -- Typing indicator ------------------------------------------------------
   // Transient presence only: no history, no persistence. "Other is typing"
@@ -587,7 +624,30 @@ export function ChatPage() {
                 </button>
                 <span className="chat-avatar sm">{initials(threadHeaderName)}</span>
                 <span className="chat-thread-header-name">{threadHeaderName}</span>
+                <span className="chat-thread-header-spacer" />
+                <button
+                  type="button"
+                  className="chat-thread-search-btn"
+                  aria-label={t('chat.searchInConversation')}
+                  aria-pressed={searchOpen}
+                  onClick={() => setSearchOpen((open) => !open)}
+                >
+                  🔍
+                </button>
               </div>
+
+              {searchOpen && (
+                <div className="chat-search-bar">
+                  <input
+                    type="search"
+                    className="search-input"
+                    autoFocus
+                    placeholder={t('chat.searchInConversationPlaceholder')}
+                    value={searchQuery}
+                    onChange={(e) => setSearchQuery(e.target.value)}
+                  />
+                </div>
+              )}
 
               {(connectionState === 'reconnecting' || connectionState === 'down') && (
                 <div className={`chat-stream-banner${connectionState === 'down' ? ' down' : ''}`}>
@@ -601,6 +661,28 @@ export function ChatPage() {
               )}
 
               <div className="chat-messages" ref={messagesElRef} onScroll={handleScroll}>
+                {searchOpen && searchQuery.trim() ? (
+                  <div className="chat-search-results">
+                    {searchError && <p className="error">{searchError}</p>}
+                    {searchLoading ? (
+                      <p className="hint">{t('common.loading')}</p>
+                    ) : searchResults && searchResults.length === 0 ? (
+                      <p className="hint">{t('chat.noResults')}</p>
+                    ) : (
+                      searchResults?.map((m) => (
+                        <div key={m.id} className="chat-search-result-row">
+                          <span className="chat-search-result-meta">
+                            {(m.senderId === user.id ? t('chat.you') : threadHeaderName) +
+                              ' · ' +
+                              formatListTimestamp(m.createdAt, language)}
+                          </span>
+                          <span className="chat-search-result-body">{m.body}</span>
+                        </div>
+                      ))
+                    )}
+                  </div>
+                ) : (
+                  <>
                 {messagesError && <p className="error">{messagesError}</p>}
                 {(hasMore || driveHasMore) && (
                   <button type="button" className="chat-load-more" onClick={loadOlder} disabled={loadingOlder}>
@@ -722,6 +804,8 @@ export function ChatPage() {
                       </div>
                     )
                   })
+                )}
+                  </>
                 )}
               </div>
 
