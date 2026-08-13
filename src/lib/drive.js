@@ -87,12 +87,25 @@ async function ensureArchiveFile(user, conversation, accessToken, folderId) {
   if (existing) return existing;
 
   const name = fileNameForConversation(conversation, user.id);
-  const createRes = await driveFetch(accessToken, `${DRIVE_API}/files?fields=id`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ name, parents: [folderId], mimeType: "text/plain" }),
-  });
-  const driveFileId = (await createRes.json()).id;
+
+  // Search before creating, mirroring ensureBackupFolder: if the DB write
+  // below failed on a previous sweep right after the Drive-side file was
+  // successfully created, that file has no DriveArchiveFile row pointing at
+  // it. Without this search, every sweep would create a brand-new file for
+  // the same conversation, leaving prior ones orphaned in the user's Drive.
+  const q = encodeURIComponent(`name = '${name}' and '${folderId}' in parents and trashed = false`);
+  const searchRes = await driveFetch(accessToken, `${DRIVE_API}/files?q=${q}&fields=files(id)`);
+  const { files } = await searchRes.json();
+  let driveFileId = files?.[0]?.id;
+
+  if (!driveFileId) {
+    const createRes = await driveFetch(accessToken, `${DRIVE_API}/files?fields=id`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ name, parents: [folderId], mimeType: "text/plain" }),
+    });
+    driveFileId = (await createRes.json()).id;
+  }
 
   return prisma.driveArchiveFile.create({
     data: { userId: user.id, conversationId: conversation.id, driveFileId, lastArchivedMessageId: 0 },
@@ -141,7 +154,15 @@ async function archiveUserConversations(userId) {
     });
     if (newMessages.length === 0) continue;
 
-    const existingContent = await downloadFileContent(accessToken, archiveFile.driveFileId).catch(() => "");
+    // Deliberately not `.catch(() => "")`: a download failure here (transient
+    // network error, rate limit, anything driveFetch throws on) must not be
+    // treated the same as "file legitimately has no content yet" — doing so
+    // would feed an empty string into the overwrite below and permanently
+    // destroy everything already archived in this file. Letting it throw
+    // means this conversation is skipped for this sweep and retried next
+    // time (see the per-user try/catch in runArchiveSweep), never silently
+    // truncated.
+    const existingContent = await downloadFileContent(accessToken, archiveFile.driveFileId);
     const newLines = newMessages
       .map((m) =>
         JSON.stringify({
