@@ -266,6 +266,28 @@ describe("Chat API", () => {
       assert.equal(adminList.body.length, 1);
       assert.equal(adminList.body[0].id, convAdminStaff.body.id);
     });
+
+    test("otherLastReadAt reflects the OTHER participant's own last-read timestamp, not the caller's", async () => {
+      const conv = await request(app)
+        .post("/api/chat/conversations")
+        .set("Authorization", `Bearer ${adminToken}`)
+        .send({ userId: staffUser.id });
+
+      const beforeRead = await request(app)
+        .get("/api/chat/conversations")
+        .set("Authorization", `Bearer ${adminToken}`);
+      assert.equal(beforeRead.body.find((c) => c.id === conv.body.id).otherLastReadAt, null);
+
+      const readRes = await request(app)
+        .post(`/api/chat/conversations/${conv.body.id}/read`)
+        .set("Authorization", `Bearer ${staffToken}`)
+        .send({});
+
+      const afterRead = await request(app)
+        .get("/api/chat/conversations")
+        .set("Authorization", `Bearer ${adminToken}`);
+      assert.equal(afterRead.body.find((c) => c.id === conv.body.id).otherLastReadAt, readRes.body.lastReadAt);
+    });
   });
 
   describe("GET /chat/conversations/:id/messages", () => {
@@ -699,6 +721,33 @@ describe("Chat API", () => {
         .get("/api/chat/conversations")
         .set("Authorization", `Bearer ${staffToken}`);
       assert.equal(afterStaffList.body.find((c) => c.id === conv.body.id).unreadCount, 0);
+    });
+
+    test("publishes a read event to the other participant (the sender), not to the reader", async () => {
+      const conv = await createConversation(adminToken, staffUser.id);
+      await request(app)
+        .post(`/api/chat/conversations/${conv.body.id}/messages`)
+        .set("Authorization", `Bearer ${staffToken}`)
+        .send({ body: "msg 1" });
+
+      const staffWaiter = waitForEvent(staffUser.id, "read");
+      const adminWaiter = waitForEvent(adminUser.id, "read", 200).catch((err) => err);
+
+      const res = await request(app)
+        .post(`/api/chat/conversations/${conv.body.id}/read`)
+        .set("Authorization", `Bearer ${adminToken}`)
+        .send({});
+      assert.equal(res.status, 200);
+
+      const staffPayload = await staffWaiter;
+      assert.equal(staffPayload.conversationId, conv.body.id);
+      assert.equal(staffPayload.readerId, adminUser.id);
+      // chatBus carries the raw Date object (in-process, pre-serialization);
+      // the HTTP response has already gone through JSON.stringify. Compare
+      // as ISO strings, which is also what a real SSE client receives.
+      assert.equal(staffPayload.lastReadAt.toISOString(), res.body.lastReadAt);
+
+      assert.ok((await adminWaiter) instanceof Error, "the reader must not receive their own read event");
     });
   });
 

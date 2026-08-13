@@ -463,6 +463,17 @@ export function ChatPage() {
     ? activeConversation.otherUser.name || activeConversation.otherUser.email
     : t('common.loading')
 
+  // Only the caller's most recent (sent, non-failed) message gets a "Read"
+  // tick — matching how WhatsApp/Telegram/etc. show it once per thread
+  // rather than on every message the other side has read.
+  const lastMineMessageId = useMemo(() => {
+    for (let i = messages.length - 1; i >= 0; i--) {
+      if (messages[i].senderId === user.id && !messages[i].pending && !messages[i].failed) return messages[i].id
+    }
+    return null
+  }, [messages, user.id])
+  const otherLastReadAt = activeConversation?.otherLastReadAt ? new Date(activeConversation.otherLastReadAt) : null
+
   let lastDayKey = null
 
   return (
@@ -663,7 +674,15 @@ export function ChatPage() {
                                 )}
                                 {m.body}
                                 {m.editedAt && <span className="chat-bubble-edited-tag"> {t('chat.edited')}</span>}
-                                <span className="chat-bubble-time">{formatTime(m.createdAt, language)}</span>
+                                <span className="chat-bubble-time">
+                                  {formatTime(m.createdAt, language)}
+                                  {mine &&
+                                    m.id === lastMineMessageId &&
+                                    otherLastReadAt &&
+                                    otherLastReadAt >= new Date(m.createdAt) && (
+                                      <span className="chat-bubble-read-tag"> · {t('chat.read')}</span>
+                                    )}
+                                </span>
                               </div>
                             )}
                             {mine && !m.pending && !m.failed && !m.deletedAt && editingMessageId !== m.id && (

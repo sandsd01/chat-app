@@ -141,6 +141,15 @@ export function ChatProvider({ children }) {
     })
   }, [refreshConversations])
 
+  // Patches the other participant's last-read timestamp in place on a live
+  // "read" event, so an open thread's "Read" tick updates without a refetch
+  // — see GET /conversations's otherLastReadAt (src/routes/chat.js).
+  const updateOtherLastReadAt = useCallback((conversationId, lastReadAt) => {
+    setConversations((prev) =>
+      prev.map((c) => (c.id === conversationId ? { ...c, otherLastReadAt: lastReadAt } : c))
+    )
+  }, [])
+
   // Keeps the conversation-list preview from showing stale/deleted text
   // after an edit or delete of whichever message it was last showing —
   // patches only when the edited/deleted id is actually the cached preview.
@@ -223,6 +232,14 @@ export function ChatProvider({ children }) {
         // ignore malformed payloads
       }
     })
+    es.addEventListener('read', (evt) => {
+      try {
+        const payload = JSON.parse(evt.data)
+        updateOtherLastReadAt(payload.conversationId, payload.lastReadAt)
+      } catch {
+        // ignore malformed payloads
+      }
+    })
     es.addEventListener('friend', (evt) => {
       try {
         const payload = JSON.parse(evt.data)
@@ -236,7 +253,7 @@ export function ChatProvider({ children }) {
       if (esRef.current === es) esRef.current = null
       scheduleReconnect()
     }
-  }, [token, handleIncomingMessage, updateCachedLastMessage, scheduleReconnect])
+  }, [token, handleIncomingMessage, updateCachedLastMessage, updateOtherLastReadAt, scheduleReconnect])
   connectRef.current = connect
 
   useEffect(() => {

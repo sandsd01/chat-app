@@ -988,6 +988,10 @@ td:has(+ td) {
   opacity: 0.7;
 }
 
+.chat-bubble-read-tag {
+  font-weight: 600;
+}
+
 .chat-bubble-edit {
   display: flex;
   flex-direction: column;

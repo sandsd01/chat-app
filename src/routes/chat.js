@@ -136,6 +136,11 @@ function conversationSummary(conversation, meId) {
     otherUser,
     lastMessageAt: conversation.lastMessageAt,
     createdAt: conversation.createdAt,
+    // The other participant's own last-read timestamp (not the caller's) —
+    // lets the thread UI show a "Read" tick on the caller's own last
+    // message once it's at or before this. No new column: this is exactly
+    // the field POST .../read already writes for whichever side isn't `me`.
+    otherLastReadAt: isUserA ? conversation.userBLastReadAt : conversation.userALastReadAt,
   };
 }
 
@@ -509,10 +514,11 @@ router.post("/conversations/:id/read", async (req, res) => {
     data: isUserA ? { userALastReadAt: now } : { userBLastReadAt: now },
   });
 
-  res.json({
-    conversationId: updated.id,
-    lastReadAt: isUserA ? updated.userALastReadAt : updated.userBLastReadAt,
-  });
+  const lastReadAt = isUserA ? updated.userALastReadAt : updated.userBLastReadAt;
+  const otherUserId = isUserA ? updated.userBId : updated.userAId;
+  chatBus.publish(otherUserId, "read", { conversationId: updated.id, readerId: req.user.id, lastReadAt });
+
+  res.json({ conversationId: updated.id, lastReadAt });
 });
 
 router.post("/stream-ticket", (req, res) => {
