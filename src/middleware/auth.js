@@ -10,7 +10,11 @@ function authenticate(req, res, next) {
   }
 
   try {
-    const payload = jwt.verify(token, process.env.JWT_SECRET);
+    // Pinning algorithms is defense-in-depth against algorithm-confusion
+    // attacks even though sign/verify here always use the same HMAC secret
+    // (no asymmetric keys in play) — jsonwebtoken's own docs call this out
+    // as standard hardening.
+    const payload = jwt.verify(token, process.env.JWT_SECRET, { algorithms: ["HS256"] });
     req.user = { id: payload.sub, email: payload.email, role: payload.role };
     next();
   } catch {

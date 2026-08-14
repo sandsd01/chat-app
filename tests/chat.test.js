@@ -425,6 +425,14 @@ describe("Chat API", () => {
       assert.equal(blank.status, 400);
     });
 
+    test("400 when q is longer than 200 characters", async () => {
+      const conv = await createConversation(adminToken, staffUser.id);
+      const res = await request(app)
+        .get(`/api/chat/conversations/${conv.body.id}/messages/search?q=${"a".repeat(201)}`)
+        .set("Authorization", `Bearer ${adminToken}`);
+      assert.equal(res.status, 400);
+    });
+
     test("matches case-insensitively, scoped to this conversation only, newest match first", async () => {
       const conv = await createConversation(adminToken, staffUser.id);
       const otherConv = await createConversation(staffToken, otherUser.id);

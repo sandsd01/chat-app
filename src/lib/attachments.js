@@ -41,8 +41,16 @@ function extensionOf(fileName) {
   return dot === -1 ? "" : fileName.slice(dot).toLowerCase();
 }
 
+// Deliberately an allowlist, not "startsWith('image/')": an SVG is XML that
+// can carry an inline <script>, and image/* covers it too. Anything not on
+// this list — including SVG — is classed "file" below, which forces a
+// download disposition on the presigned GET URL instead of letting a browser
+// render (and execute) it inline just because the tab it opened in trusted
+// a same-app URL.
+const SAFE_INLINE_IMAGE_TYPES = new Set(["image/png", "image/jpeg", "image/gif", "image/webp", "image/avif"]);
+
 function attachmentTypeFor(mimeType) {
-  return mimeType.startsWith("image/") ? "image" : "file";
+  return SAFE_INLINE_IMAGE_TYPES.has(mimeType.toLowerCase()) ? "image" : "file";
 }
 
 /**
@@ -113,8 +121,18 @@ async function verifyUploadedObject(key) {
 /// Fresh, short-lived download link — never a permanent URL. Callers are
 /// responsible for only calling this once they've confirmed the requester is
 /// a participant of the conversation the attachment belongs to.
-async function createDownloadUrl(key) {
-  const command = new GetObjectCommand({ Bucket: R2_BUCKET_NAME, Key: key });
+///
+/// `attachmentType` forces the response's Content-Disposition: "image" (from
+/// the SAFE_INLINE_IMAGE_TYPES allowlist above) renders inline as a preview,
+/// anything else downloads instead of opening directly in the browser tab —
+/// the thing that would otherwise let a non-image object with a spoofable
+/// Content-Type render/execute as if it were trusted first-party content.
+async function createDownloadUrl(key, attachmentType) {
+  const command = new GetObjectCommand({
+    Bucket: R2_BUCKET_NAME,
+    Key: key,
+    ResponseContentDisposition: attachmentType === "image" ? "inline" : "attachment",
+  });
   return presigner.getSignedUrl(s3Client, command, { expiresIn: PRESIGN_TTL_SECONDS });
 }
 

@@ -36,11 +36,18 @@ router.patch("/me", async (req, res) => {
     return res.status(409).json({ error: "That ID is already taken" });
   }
 
-  const updated = await prisma.user.update({
-    where: { id: req.user.id },
+  // updateMany (not update) so the WHERE clause re-checks publicIdCustomized
+  // at write time, not just in the read above — two concurrent requests that
+  // both passed the read-time check would otherwise both succeed, spending
+  // the "one custom ID" allowance twice (last write wins).
+  const { count } = await prisma.user.updateMany({
+    where: { id: req.user.id, publicIdCustomized: false },
     data: { publicId, publicIdCustomized: true },
   });
-  res.json({ publicId: updated.publicId });
+  if (count === 0) {
+    return res.status(409).json({ error: "You've already set a custom ID" });
+  }
+  res.json({ publicId });
 });
 
 // There is no admin role in this app (phase 1 is email+password only, one
@@ -64,7 +71,18 @@ router.delete("/me", async (req, res) => {
     return res.status(409).json({ error: "Cannot delete an account with sent messages" });
   }
 
-  await prisma.user.delete({ where: { id } });
+  try {
+    await prisma.user.delete({ where: { id } });
+  } catch (err) {
+    // The checks above are read-then-act, not transactional — a message
+    // sent in the gap between them and this delete hits the FK constraint
+    // here instead. Translate that into the same clean 409 rather than
+    // letting it fall through to a raw 500.
+    if (err.code === "P2003") {
+      return res.status(409).json({ error: "Cannot delete an account with chat conversations" });
+    }
+    throw err;
+  }
   res.status(204).send();
 });
 

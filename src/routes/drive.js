@@ -8,7 +8,6 @@ const {
   driveOauthClient,
   DRIVE_SCOPE,
   archiveUserConversations,
-  pruneArchivedMessages,
 } = require("../lib/drive");
 
 const router = express.Router();
@@ -149,8 +148,11 @@ router.post("/sync", authenticate, async (req, res) => {
   }
 
   try {
+    // Pruning is a full-conversation-table scan across every user, not just
+    // this one — it only runs from the cron sweep (src/server.js#runArchiveSweep),
+    // never from a single user's request, so one account can't force a
+    // system-wide scan/delete just by hitting this endpoint repeatedly.
     const result = await archiveUserConversations(req.user.id);
-    await pruneArchivedMessages();
     res.json(result);
   } catch (err) {
     console.error("Google Drive sync failed:", err.message);

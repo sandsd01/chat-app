@@ -25,6 +25,14 @@ function hashToken(token) {
   return crypto.createHash("sha256").update(token).digest("hex");
 }
 
+// crypto.timingSafeEqual over `!==` for the same reason password checks go
+// through bcrypt.compare instead of a plain string compare — both sides are
+// fixed-length sha256 hex digests here, so lengths always match and this
+// never throws on that account.
+function hashesMatch(a, b) {
+  return crypto.timingSafeEqual(Buffer.from(a, "hex"), Buffer.from(b, "hex"));
+}
+
 function signToken(user) {
   return jwt.sign({ sub: user.id, email: user.email }, process.env.JWT_SECRET, { expiresIn: "8h" });
 }
@@ -315,7 +323,7 @@ router.post("/verify-email", authLimiter, async (req, res) => {
     !user.verifyTokenHash ||
     !user.verifyTokenExpiresAt ||
     user.verifyTokenExpiresAt < new Date() ||
-    user.verifyTokenHash !== hashToken(token)
+    !hashesMatch(user.verifyTokenHash, hashToken(token))
   ) {
     return res.status(400).json({ error: "Invalid or expired verification link" });
   }
@@ -431,7 +439,7 @@ router.post("/reset-password", authLimiter, async (req, res) => {
     !user.resetTokenHash ||
     !user.resetTokenExpiresAt ||
     user.resetTokenExpiresAt < new Date() ||
-    user.resetTokenHash !== hashToken(token)
+    !hashesMatch(user.resetTokenHash, hashToken(token))
   ) {
     return res.status(400).json({ error: "Invalid or expired reset token" });
   }

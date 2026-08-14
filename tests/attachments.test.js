@@ -10,7 +10,14 @@ const { S3Client } = require("@aws-sdk/client-s3");
 const presigner = require("@aws-sdk/s3-request-presigner");
 const { resetDb, createUser, makeFriends, prisma } = require("./helpers/db");
 const app = require("../src/app");
-const { validateUpload, attachmentTypeFor, keyFor, MAX_IMAGE_BYTES, MAX_FILE_BYTES } = require("../src/lib/attachments");
+const {
+  validateUpload,
+  attachmentTypeFor,
+  keyFor,
+  createDownloadUrl,
+  MAX_IMAGE_BYTES,
+  MAX_FILE_BYTES,
+} = require("../src/lib/attachments");
 
 async function login(email, password) {
   const res = await request(app).post("/api/auth/login").send({ email, password });
@@ -30,6 +37,25 @@ describe("src/lib/attachments.js#attachmentTypeFor", () => {
 
   test("classifies anything else as file", () => {
     assert.equal(attachmentTypeFor("application/pdf"), "file");
+  });
+
+  test("classifies image/svg+xml as file, not image — SVG is XML that can carry a <script>", () => {
+    assert.equal(attachmentTypeFor("image/svg+xml"), "file");
+  });
+});
+
+describe("src/lib/attachments.js#createDownloadUrl", () => {
+  test("renders images inline but forces a download disposition for anything else", async (t) => {
+    const seen = [];
+    t.mock.method(presigner, "getSignedUrl", async (_client, command) => {
+      seen.push(command.input.ResponseContentDisposition);
+      return `https://fake.r2.example/${command.input.Key}`;
+    });
+
+    await createDownloadUrl("some-key", "image");
+    await createDownloadUrl("some-key", "file");
+
+    assert.deepEqual(seen, ["inline", "attachment"]);
   });
 });
 

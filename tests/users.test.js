@@ -3,6 +3,7 @@ const assert = require("node:assert/strict");
 const request = require("supertest");
 const { resetDb, createUser } = require("./helpers/db");
 const app = require("../src/app");
+const prisma = require("../prisma/client");
 
 async function login(email, password) {
   const res = await request(app).post("/api/auth/login").send({ email, password });
@@ -105,5 +106,20 @@ describe("PATCH /users/me", () => {
       .send({ publicId: "aliceid2" });
 
     assert.equal(second.status, 409);
+  });
+
+  test("two concurrent requests can't both spend the one-time custom-id allowance", async () => {
+    const [first, second] = await Promise.all([
+      request(app).patch("/api/users/me").set("Authorization", `Bearer ${aliceToken}`).send({ publicId: "raceida" }),
+      request(app).patch("/api/users/me").set("Authorization", `Bearer ${aliceToken}`).send({ publicId: "raceidb" }),
+    ]);
+
+    const statuses = [first.status, second.status].sort();
+    assert.deepEqual(statuses, [200, 409]);
+
+    const winner = first.status === 200 ? first : second;
+    const updated = await prisma.user.findUnique({ where: { id: alice.id } });
+    assert.equal(updated.publicId, winner.body.publicId);
+    assert.equal(updated.publicIdCustomized, true);
   });
 });

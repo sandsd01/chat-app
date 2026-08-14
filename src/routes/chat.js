@@ -265,7 +265,7 @@ router.get("/conversations/:id/messages", async (req, res) => {
   const data = await Promise.all(
     page.map(async (m) => ({
       ...m,
-      attachmentUrl: m.attachmentKey ? await createDownloadUrl(m.attachmentKey) : null,
+      attachmentUrl: m.attachmentKey ? await createDownloadUrl(m.attachmentKey, m.attachmentType) : null,
       reactions: reactionsByMessage.get(m.id) || [],
     }))
   );
@@ -288,6 +288,7 @@ router.get("/conversations/:id/messages/search", async (req, res) => {
 
   const q = typeof req.query.q === "string" ? req.query.q.trim() : "";
   if (!q) return res.status(400).json({ error: "q is required" });
+  if (q.length > 200) return res.status(400).json({ error: "q must be 200 characters or fewer" });
 
   const limit = Math.min(100, Math.max(1, Number.parseInt(req.query.limit, 10) || 50));
 
@@ -315,7 +316,7 @@ router.get("/conversations/:id/messages/search", async (req, res) => {
   const data = await Promise.all(
     page.map(async (m) => ({
       ...m,
-      attachmentUrl: m.attachmentKey ? await createDownloadUrl(m.attachmentKey) : null,
+      attachmentUrl: m.attachmentKey ? await createDownloadUrl(m.attachmentKey, m.attachmentType) : null,
     }))
   );
 
@@ -434,7 +435,9 @@ router.post("/conversations/:id/messages", async (req, res) => {
     attachmentType: message.attachmentType,
   };
 
-  const attachmentUrl = payload.attachmentKey ? await createDownloadUrl(payload.attachmentKey) : null;
+  const attachmentUrl = payload.attachmentKey
+    ? await createDownloadUrl(payload.attachmentKey, payload.attachmentType)
+    : null;
   const ssePayload = { ...payload, attachmentUrl };
 
   // Deliberately not logged via src/lib/audit.js — message content doesn't

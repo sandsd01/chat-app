@@ -169,10 +169,18 @@ router.post("/requests/:id/accept", async (req, res) => {
     return res.status(400).json({ error: "You can't accept your own request" });
   }
 
-  await prisma.friendship.update({
-    where: { id: row.id },
-    data: { status: "accepted", respondedAt: new Date() },
-  });
+  try {
+    await prisma.friendship.update({
+      where: { id: row.id },
+      data: { status: "accepted", respondedAt: new Date() },
+    });
+  } catch (err) {
+    // loadOwnPendingRequest read the row, but a concurrent decline/cancel
+    // could delete it before this update runs — P2025 ("record not found")
+    // is that race, not a real server error.
+    if (err.code === "P2025") return res.status(409).json({ error: "This request was already handled" });
+    throw err;
+  }
   const me = await prisma.user.findUnique({ where: { id: req.user.id }, select: { name: true, email: true } });
   notify(row.requestedById, "Friend request accepted", `${me.name || me.email} accepted your request`);
   publishFriendEvent(row.requestedById, "request_accepted");
@@ -188,7 +196,14 @@ router.post("/requests/:id/decline", async (req, res) => {
 
   // Deleted, not kept as a "declined" row, so the same two people can try
   // again later without a stale row blocking a fresh request.
-  await prisma.friendship.delete({ where: { id: row.id } });
+  try {
+    await prisma.friendship.delete({ where: { id: row.id } });
+  } catch (err) {
+    // Same read-then-act race as accept above: the row loadOwnPendingRequest
+    // found could already be gone by the time this delete runs.
+    if (err.code === "P2025") return res.status(409).json({ error: "This request was already handled" });
+    throw err;
+  }
   res.status(204).send();
 });
 
@@ -199,7 +214,12 @@ router.delete("/requests/:id", async (req, res) => {
     return res.status(400).json({ error: "Only the sender can cancel a request" });
   }
 
-  await prisma.friendship.delete({ where: { id: row.id } });
+  try {
+    await prisma.friendship.delete({ where: { id: row.id } });
+  } catch (err) {
+    if (err.code === "P2025") return res.status(409).json({ error: "This request was already handled" });
+    throw err;
+  }
   res.status(204).send();
 });
 
