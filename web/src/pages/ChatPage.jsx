@@ -19,7 +19,7 @@ import {
 } from '../api/chat'
 import { useDriveBackup } from '../hooks/useDriveBackup'
 import { EmojiPicker } from '../components/EmojiPicker'
-import { initials } from '../lib/format'
+import { initials, localeFor } from '../lib/format'
 
 const MESSAGE_PAGE_SIZE = 50
 const SCROLL_BOTTOM_THRESHOLD = 80
@@ -36,25 +36,18 @@ function formatDayLabel(dateStr, t, language) {
   yesterday.setDate(today.getDate() - 1)
   if (isSameDay(d, today)) return t('chat.today')
   if (isSameDay(d, yesterday)) return t('chat.yesterday')
-  return d.toLocaleDateString(language === 'th' ? 'th-TH' : 'en-US', {
-    day: 'numeric',
-    month: 'short',
-    year: 'numeric',
-  })
+  return d.toLocaleDateString(localeFor(language), { day: 'numeric', month: 'short', year: 'numeric' })
 }
 
 function formatTime(dateStr, language) {
-  return new Date(dateStr).toLocaleTimeString(language === 'th' ? 'th-TH' : 'en-US', {
-    hour: '2-digit',
-    minute: '2-digit',
-  })
+  return new Date(dateStr).toLocaleTimeString(localeFor(language), { hour: '2-digit', minute: '2-digit' })
 }
 
 function formatListTimestamp(dateStr, language) {
   const d = new Date(dateStr)
   const today = new Date()
   if (isSameDay(d, today)) return formatTime(dateStr, language)
-  return d.toLocaleDateString(language === 'th' ? 'th-TH' : 'en-US', { day: 'numeric', month: 'short' })
+  return d.toLocaleDateString(localeFor(language), { day: 'numeric', month: 'short' })
 }
 
 export function ChatPage() {

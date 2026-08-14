@@ -628,11 +628,9 @@ label {
 }
 
 /* ---- Chat (1:1 direct messages) -----------------------------------------
-   A back-office screen checked between POS tasks, sometimes on a phone: list
-   pane + thread pane side by side above 780px — the same width pos-layout
-   already collapses at, since both are "two working columns that stop
-   fitting their comfortable minimums." Below it, one pane at a time with a
-   route-driven back button standing in for the second column. */
+   List pane + thread pane side by side above 780px — below that, both stop
+   fitting their comfortable minimums, so it's one pane at a time instead,
+   with a route-driven back button standing in for the second column. */
 
 .chat-layout {
   display: flex;

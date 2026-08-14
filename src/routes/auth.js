@@ -412,8 +412,7 @@ router.post("/forgot-password", authLimiter, async (req, res) => {
     },
   });
 
-  const appUrl = process.env.APP_URL || "http://localhost:5173";
-  const resetUrl = `${appUrl}/reset-password?token=${token}&email=${encodeURIComponent(email)}`;
+  const resetUrl = `${appUrl()}/reset-password?token=${token}&email=${encodeURIComponent(email)}`;
 
   try {
     await sendPasswordResetEmail(user, resetUrl);

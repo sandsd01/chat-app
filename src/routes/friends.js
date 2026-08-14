@@ -39,6 +39,18 @@ function otherUserOf(friendship, meId) {
   return friendship.userAId === meId ? friendship.userB : friendship.userA;
 }
 
+// Shared by every route below keyed on a :userId param. Sends the 400 itself
+// (rather than returning an error object) so each call site stays a
+// one-line early return.
+function parseTargetUserId(req, res) {
+  const targetId = Number(req.params.userId);
+  if (!Number.isInteger(targetId)) {
+    res.status(400).json({ error: "Invalid user id" });
+    return null;
+  }
+  return targetId;
+}
+
 /** Exported for chat.js — true only for an `accepted` row between the two ids. */
 async function areFriends(userId1, userId2) {
   const { userAId, userBId } = pair(userId1, userId2);
@@ -226,8 +238,8 @@ router.delete("/requests/:id", async (req, res) => {
 // --- Existing friends ---------------------------------------------------------
 
 router.delete("/:userId", async (req, res) => {
-  const targetId = Number(req.params.userId);
-  if (!Number.isInteger(targetId)) return res.status(400).json({ error: "Invalid user id" });
+  const targetId = parseTargetUserId(req, res);
+  if (targetId === null) return;
 
   const { userAId, userBId } = pair(req.user.id, targetId);
   const row = await prisma.friendship.findUnique({ where: { userAId_userBId: { userAId, userBId } } });
@@ -240,8 +252,8 @@ router.delete("/:userId", async (req, res) => {
 });
 
 router.post("/:userId/block", async (req, res) => {
-  const targetId = Number(req.params.userId);
-  if (!Number.isInteger(targetId)) return res.status(400).json({ error: "Invalid user id" });
+  const targetId = parseTargetUserId(req, res);
+  if (targetId === null) return;
   if (targetId === req.user.id) return res.status(400).json({ error: "You can't block yourself" });
 
   const target = await prisma.user.findUnique({ where: { id: targetId } });
@@ -257,8 +269,8 @@ router.post("/:userId/block", async (req, res) => {
 });
 
 router.post("/:userId/unblock", async (req, res) => {
-  const targetId = Number(req.params.userId);
-  if (!Number.isInteger(targetId)) return res.status(400).json({ error: "Invalid user id" });
+  const targetId = parseTargetUserId(req, res);
+  if (targetId === null) return;
 
   const { userAId, userBId } = pair(req.user.id, targetId);
   const row = await prisma.friendship.findUnique({ where: { userAId_userBId: { userAId, userBId } } });

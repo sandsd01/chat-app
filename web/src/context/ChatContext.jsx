@@ -19,6 +19,19 @@ function dispatchViaMap(map, key, payload) {
   map.get(key)?.forEach((cb) => cb(payload))
 }
 
+// Every SSE listener below parses the event's JSON payload and swallows a
+// parse failure identically — only what each does with the parsed payload
+// differs, so that part is factored out here.
+function addJsonListener(es, event, handler) {
+  es.addEventListener(event, (evt) => {
+    try {
+      handler(JSON.parse(evt.data))
+    } catch {
+      // ignore malformed payloads
+    }
+  })
+}
+
 // Reconnect backoff: 1s, 2s, 4s, 8s, 16s, capped at 30s. After a handful of
 // failed attempts we report `down` instead of `reconnecting` so the banner
 // can escalate to the danger palette per the design spec.
@@ -209,70 +222,29 @@ export function ChatProvider({ children }) {
       attemptRef.current = 0
       setConnectionState('connected')
     }
-    es.addEventListener('message', (evt) => {
-      try {
-        handleIncomingMessage(JSON.parse(evt.data))
-      } catch {
-        // ignore malformed payloads
-      }
+    addJsonListener(es, 'message', handleIncomingMessage)
+    addJsonListener(es, 'typing', (payload) => {
+      dispatchViaMap(typingListenersRef.current, payload.conversationId, payload)
     })
-    es.addEventListener('typing', (evt) => {
-      try {
-        const payload = JSON.parse(evt.data)
-        dispatchViaMap(typingListenersRef.current, payload.conversationId, payload)
-      } catch {
-        // ignore malformed payloads
-      }
+    addJsonListener(es, 'message-edited', (payload) => {
+      dispatchViaMap(editedListenersRef.current, payload.conversationId, payload)
+      updateCachedLastMessage(payload.conversationId, payload.id, { body: payload.body, editedAt: payload.editedAt })
     })
-    es.addEventListener('message-edited', (evt) => {
-      try {
-        const payload = JSON.parse(evt.data)
-        dispatchViaMap(editedListenersRef.current, payload.conversationId, payload)
-        updateCachedLastMessage(payload.conversationId, payload.id, { body: payload.body, editedAt: payload.editedAt })
-      } catch {
-        // ignore malformed payloads
-      }
+    addJsonListener(es, 'message-deleted', (payload) => {
+      dispatchViaMap(deletedListenersRef.current, payload.conversationId, payload)
+      updateCachedLastMessage(payload.conversationId, payload.id, { body: null, deletedAt: payload.deletedAt })
     })
-    es.addEventListener('message-deleted', (evt) => {
-      try {
-        const payload = JSON.parse(evt.data)
-        dispatchViaMap(deletedListenersRef.current, payload.conversationId, payload)
-        updateCachedLastMessage(payload.conversationId, payload.id, { body: null, deletedAt: payload.deletedAt })
-      } catch {
-        // ignore malformed payloads
-      }
+    addJsonListener(es, 'reaction-added', (payload) => {
+      dispatchViaMap(reactionAddedListenersRef.current, payload.conversationId, payload)
     })
-    es.addEventListener('reaction-added', (evt) => {
-      try {
-        const payload = JSON.parse(evt.data)
-        dispatchViaMap(reactionAddedListenersRef.current, payload.conversationId, payload)
-      } catch {
-        // ignore malformed payloads
-      }
+    addJsonListener(es, 'reaction-removed', (payload) => {
+      dispatchViaMap(reactionRemovedListenersRef.current, payload.conversationId, payload)
     })
-    es.addEventListener('reaction-removed', (evt) => {
-      try {
-        const payload = JSON.parse(evt.data)
-        dispatchViaMap(reactionRemovedListenersRef.current, payload.conversationId, payload)
-      } catch {
-        // ignore malformed payloads
-      }
+    addJsonListener(es, 'read', (payload) => {
+      updateOtherLastReadAt(payload.conversationId, payload.lastReadAt)
     })
-    es.addEventListener('read', (evt) => {
-      try {
-        const payload = JSON.parse(evt.data)
-        updateOtherLastReadAt(payload.conversationId, payload.lastReadAt)
-      } catch {
-        // ignore malformed payloads
-      }
-    })
-    es.addEventListener('friend', (evt) => {
-      try {
-        const payload = JSON.parse(evt.data)
-        friendListenersRef.current.forEach((cb) => cb(payload))
-      } catch {
-        // ignore malformed payloads
-      }
+    addJsonListener(es, 'friend', (payload) => {
+      friendListenersRef.current.forEach((cb) => cb(payload))
     })
     es.onerror = () => {
       es.close()

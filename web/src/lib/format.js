@@ -1,3 +1,7 @@
+export function localeFor(language) {
+  return language === 'th' ? 'th-TH' : 'en-US'
+}
+
 export function initials(nameOrEmail) {
   const source = (nameOrEmail || '').trim()
   if (!source) return '?'

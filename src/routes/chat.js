@@ -91,7 +91,7 @@ router.post("/uploads", async (req, res) => {
   const conversation = await getConversationForParticipant(conversationId, req.user.id);
   if (!conversation) return res.status(404).json({ error: "Conversation not found" });
 
-  const otherUserId = conversation.userAId === req.user.id ? conversation.userBId : conversation.userAId;
+  const otherUserId = otherParticipantId(conversation, req.user.id);
   if (!(await areFriends(req.user.id, otherUserId))) {
     return res.status(403).json({ error: "You can only message accounts you're friends with" });
   }
@@ -126,6 +126,22 @@ async function getConversationForParticipant(conversationId, userId) {
   if (!conversation) return null;
   if (conversation.userAId !== userId && conversation.userBId !== userId) return null;
   return conversation;
+}
+
+function otherParticipantId(conversation, meId) {
+  return conversation.userAId === meId ? conversation.userBId : conversation.userAId;
+}
+
+// Shared by every `before`-cursor route below. Returns null if `before` is
+// present but not a valid message id, which callers turn into a 400.
+function parsePagingParams(req) {
+  const limit = Math.min(100, Math.max(1, Number.parseInt(req.query.limit, 10) || 50));
+  if (req.query.before === undefined || req.query.before === "") {
+    return { limit, before: undefined };
+  }
+  const before = Number(req.query.before);
+  if (!Number.isInteger(before)) return null;
+  return { limit, before };
 }
 
 function conversationSummary(conversation, meId) {
@@ -232,15 +248,9 @@ router.get("/conversations/:id/messages", async (req, res) => {
   const conversation = await getConversationForParticipant(conversationId, req.user.id);
   if (!conversation) return res.status(404).json({ error: "Conversation not found" });
 
-  const limit = Math.min(100, Math.max(1, Number.parseInt(req.query.limit, 10) || 50));
-
-  let before;
-  if (req.query.before !== undefined && req.query.before !== "") {
-    before = Number(req.query.before);
-    if (!Number.isInteger(before)) {
-      return res.status(400).json({ error: "before must be a message id" });
-    }
-  }
+  const paging = parsePagingParams(req);
+  if (!paging) return res.status(400).json({ error: "before must be a message id" });
+  const { limit, before } = paging;
 
   // Newest-first, walking backward on scroll-up: fetch one extra row so we
   // can tell whether there's more without a separate count query.
@@ -290,15 +300,9 @@ router.get("/conversations/:id/messages/search", async (req, res) => {
   if (!q) return res.status(400).json({ error: "q is required" });
   if (q.length > 200) return res.status(400).json({ error: "q must be 200 characters or fewer" });
 
-  const limit = Math.min(100, Math.max(1, Number.parseInt(req.query.limit, 10) || 50));
-
-  let before;
-  if (req.query.before !== undefined && req.query.before !== "") {
-    before = Number(req.query.before);
-    if (!Number.isInteger(before)) {
-      return res.status(400).json({ error: "before must be a message id" });
-    }
-  }
+  const paging = parsePagingParams(req);
+  if (!paging) return res.status(400).json({ error: "before must be a message id" });
+  const { limit, before } = paging;
 
   const rows = await prisma.message.findMany({
     where: {
@@ -338,15 +342,9 @@ router.get("/conversations/:id/messages/drive-history", async (req, res) => {
   const conversation = await getConversationForParticipant(conversationId, req.user.id);
   if (!conversation) return res.status(404).json({ error: "Conversation not found" });
 
-  const limit = Math.min(100, Math.max(1, Number.parseInt(req.query.limit, 10) || 50));
-
-  let before;
-  if (req.query.before !== undefined && req.query.before !== "") {
-    before = Number(req.query.before);
-    if (!Number.isInteger(before)) {
-      return res.status(400).json({ error: "before must be a message id" });
-    }
-  }
+  const paging = parsePagingParams(req);
+  if (!paging) return res.status(400).json({ error: "before must be a message id" });
+  const { limit, before } = paging;
 
   try {
     const result = await readArchivedMessages(req.user.id, conversationId, { before, limit });
@@ -365,7 +363,7 @@ router.post("/conversations/:id/messages", async (req, res) => {
   // Re-checked at send time, not just at conversation creation: either side
   // may have unfriended (or blocked) the other since, and old messages
   // should stay readable without new ones being sendable.
-  const otherUserId = conversation.userAId === req.user.id ? conversation.userBId : conversation.userAId;
+  const otherUserId = otherParticipantId(conversation, req.user.id);
   if (!(await areFriends(req.user.id, otherUserId))) {
     return res.status(403).json({ error: "You can only message accounts you're friends with" });
   }
@@ -648,7 +646,7 @@ router.post("/conversations/:id/typing", async (req, res) => {
   const conversation = await getConversationForParticipant(conversationId, req.user.id);
   if (!conversation) return res.status(404).json({ error: "Conversation not found" });
 
-  const otherUserId = conversation.userAId === req.user.id ? conversation.userBId : conversation.userAId;
+  const otherUserId = otherParticipantId(conversation, req.user.id);
   chatBus.publish(otherUserId, "typing", { conversationId, userId: req.user.id });
 
   res.status(204).end();

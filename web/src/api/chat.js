@@ -13,30 +13,33 @@ export function startConversation(userId, token) {
   return apiFetch('/chat/conversations', { method: 'POST', body: { userId }, token })
 }
 
-export function listMessages(conversationId, { before, limit } = {}, token) {
-  const params = new URLSearchParams()
+// Shared by every paginated messages route below: `before`/`limit` (plus
+// whatever extra params a caller passes, e.g. search's `q`) only end up in
+// the query string when actually set, so an unset `before` never sends the
+// literal string "undefined".
+function pagingQuery({ before, limit, ...extra } = {}) {
+  const params = new URLSearchParams(extra)
   if (before !== undefined && before !== null) params.set('before', String(before))
   if (limit !== undefined && limit !== null) params.set('limit', String(limit))
-  const qs = params.toString()
+  return params.toString()
+}
+
+export function listMessages(conversationId, opts = {}, token) {
+  const qs = pagingQuery(opts)
   return apiFetch(`/chat/conversations/${conversationId}/messages${qs ? `?${qs}` : ''}`, { token })
 }
 
-export function searchMessages(conversationId, { q, before, limit } = {}, token) {
-  const params = new URLSearchParams({ q })
-  if (before !== undefined && before !== null) params.set('before', String(before))
-  if (limit !== undefined && limit !== null) params.set('limit', String(limit))
-  return apiFetch(`/chat/conversations/${conversationId}/messages/search?${params.toString()}`, { token })
+export function searchMessages(conversationId, { q, ...opts } = {}, token) {
+  const qs = pagingQuery({ ...opts, q })
+  return apiFetch(`/chat/conversations/${conversationId}/messages/search?${qs}`, { token })
 }
 
 // Falls back to the caller's own Google Drive archive once
 // GET /chat/conversations/:id/messages has run out of Postgres rows — see
 // CLAUDE.md. Same {data, hasMore, nextBefore} shape as listMessages, so
 // callers can treat a page from either source identically.
-export function listDriveHistory(conversationId, { before, limit } = {}, token) {
-  const params = new URLSearchParams()
-  if (before !== undefined && before !== null) params.set('before', String(before))
-  if (limit !== undefined && limit !== null) params.set('limit', String(limit))
-  const qs = params.toString()
+export function listDriveHistory(conversationId, opts = {}, token) {
+  const qs = pagingQuery(opts)
   return apiFetch(`/chat/conversations/${conversationId}/messages/drive-history${qs ? `?${qs}` : ''}`, { token })
 }
 

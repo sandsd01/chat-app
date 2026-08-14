@@ -5,15 +5,28 @@ function getClient() {
   return new Resend(process.env.RESEND_API_KEY);
 }
 
-async function sendPasswordResetEmail(user, resetUrl) {
+// Shared by both sends below: same "unconfigured means log and no-op, don't
+// throw" fallback, same Resend call shape — only the recipient/subject/body
+// differ.
+async function sendEmail({ to, subject, html, notConfiguredWarning }) {
   const client = getClient();
   if (!client) {
-    console.warn("RESEND_API_KEY not set; skipping password reset email");
+    console.warn(notConfiguredWarning);
     return { sent: false, reason: "not_configured" };
   }
 
   await client.emails.send({
     from: process.env.ALERT_EMAIL_FROM || "onboarding@resend.dev",
+    to,
+    subject,
+    html,
+  });
+
+  return { sent: true };
+}
+
+async function sendPasswordResetEmail(user, resetUrl) {
+  return sendEmail({
     to: user.email,
     subject: "Reset your password",
     html:
@@ -21,20 +34,12 @@ async function sendPasswordResetEmail(user, resetUrl) {
       "(it expires in 30 minutes):</p>" +
       `<p><a href="${resetUrl}">${resetUrl}</a></p>` +
       "<p>If you didn't request this, you can ignore this email.</p>",
+    notConfiguredWarning: "RESEND_API_KEY not set; skipping password reset email",
   });
-
-  return { sent: true };
 }
 
 async function sendVerificationEmail(user, verifyUrl) {
-  const client = getClient();
-  if (!client) {
-    console.warn("RESEND_API_KEY not set; skipping verification email");
-    return { sent: false, reason: "not_configured" };
-  }
-
-  await client.emails.send({
-    from: process.env.ALERT_EMAIL_FROM || "onboarding@resend.dev",
+  return sendEmail({
     to: user.email,
     subject: "Confirm your email address",
     html:
@@ -42,9 +47,8 @@ async function sendVerificationEmail(user, verifyUrl) {
       "(this link expires in 24 hours):</p>" +
       `<p><a href="${verifyUrl}">${verifyUrl}</a></p>` +
       "<p>If you didn't create this account, you can ignore this email.</p>",
+    notConfiguredWarning: "RESEND_API_KEY not set; skipping verification email",
   });
-
-  return { sent: true };
 }
 
 module.exports = { sendPasswordResetEmail, sendVerificationEmail };
