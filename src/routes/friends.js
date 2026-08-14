@@ -1,6 +1,6 @@
 const express = require("express");
 const prisma = require("../../prisma/client");
-const { authenticate } = require("../middleware/auth");
+const { authenticate, requireVerifiedEmail } = require("../middleware/auth");
 const { sendPushToUser } = require("../lib/push");
 const chatBus = require("../lib/chatBus");
 
@@ -104,7 +104,11 @@ router.get("/requests", async (req, res) => {
   res.json({ incoming, outgoing });
 });
 
-router.post("/requests", async (req, res) => {
+// The one route in this file gated on a verified email: sending an
+// unsolicited request to a stranger's public ID is the actual bot-abuse
+// vector, not accepting/declining/cancelling one you're already party to, or
+// anything on the existing-friends list below.
+router.post("/requests", requireVerifiedEmail, async (req, res) => {
   const meId = req.user.id;
   const publicId = typeof req.body?.publicId === "string" ? req.body.publicId.trim().toUpperCase() : "";
   if (!publicId) return res.status(400).json({ error: "publicId is required" });

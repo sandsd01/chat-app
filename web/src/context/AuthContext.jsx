@@ -56,8 +56,11 @@ export function AuthProvider({ children }) {
     setUser(data.user)
   }
 
-  async function signup(email, password, name) {
-    const data = await apiFetch('/auth/signup', { method: 'POST', body: { email, password, name } })
+  async function signup(email, password, name, captchaToken) {
+    const data = await apiFetch('/auth/signup', {
+      method: 'POST',
+      body: { email, password, name, captchaToken },
+    })
     setToken(data.token)
     setUser(data.user)
   }

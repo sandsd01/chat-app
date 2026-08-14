@@ -31,6 +31,10 @@ export function AccountPage() {
   const [customIdSaved, setCustomIdSaved] = useState(false)
   const [customIdBusy, setCustomIdBusy] = useState(false)
 
+  const [resendBusy, setResendBusy] = useState(false)
+  const [resendMessage, setResendMessage] = useState(null)
+  const [resendError, setResendError] = useState(null)
+
   const push = usePushSubscription(token)
   const drive = useDriveBackup(token)
 
@@ -52,6 +56,20 @@ export function AccountPage() {
       setCustomIdError(err.message)
     } finally {
       setCustomIdBusy(false)
+    }
+  }
+
+  async function handleResendVerification() {
+    setResendError(null)
+    setResendMessage(null)
+    setResendBusy(true)
+    try {
+      const result = await apiFetch('/auth/resend-verification', { method: 'POST', token })
+      setResendMessage(result.message)
+    } catch (err) {
+      setResendError(err.message)
+    } finally {
+      setResendBusy(false)
     }
   }
 
@@ -86,6 +104,23 @@ export function AccountPage() {
         <p>
           {t('account.yourId')} <code className="friends-id-code">{user?.publicId}</code>
         </p>
+
+        {!user?.emailVerifiedAt && (
+          <div className="account-verify-banner">
+            {resendMessage ? (
+              <span>{resendMessage}</span>
+            ) : (
+              <>
+                <span>{t('account.emailUnverified')}</span>
+                {resendError && <span className="error">{resendError}</span>}
+                <button type="button" className="btn-secondary" disabled={resendBusy} onClick={handleResendVerification}>
+                  {resendBusy ? t('common.loading') : t('account.resendVerification')}
+                </button>
+              </>
+            )}
+          </div>
+        )}
+
         {!user?.publicIdCustomized && (
           <>
             {customIdSaved ? (

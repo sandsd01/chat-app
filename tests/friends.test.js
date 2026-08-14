@@ -88,6 +88,16 @@ describe("Friends API", () => {
       assert.equal(res.status, 401);
     });
 
+    test("403s for a caller with an unverified email", async () => {
+      const dave = await createUser({ email: "dave@test.com", password: "davepass1", verified: false });
+      const daveToken = await login("dave@test.com", "davepass1");
+      const res = await request(app)
+        .post("/api/friends/requests")
+        .set("Authorization", `Bearer ${daveToken}`)
+        .send({ publicId: bob.publicId });
+      assert.equal(res.status, 403);
+    });
+
     test("400 without a publicId", async () => {
       const res = await request(app)
         .post("/api/friends/requests")

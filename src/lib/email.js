@@ -26,4 +26,25 @@ async function sendPasswordResetEmail(user, resetUrl) {
   return { sent: true };
 }
 
-module.exports = { sendPasswordResetEmail };
+async function sendVerificationEmail(user, verifyUrl) {
+  const client = getClient();
+  if (!client) {
+    console.warn("RESEND_API_KEY not set; skipping verification email");
+    return { sent: false, reason: "not_configured" };
+  }
+
+  await client.emails.send({
+    from: process.env.ALERT_EMAIL_FROM || "onboarding@resend.dev",
+    to: user.email,
+    subject: "Confirm your email address",
+    html:
+      "<p>Welcome! Confirm this address to finish setting up your account " +
+      "(this link expires in 24 hours):</p>" +
+      `<p><a href="${verifyUrl}">${verifyUrl}</a></p>` +
+      "<p>If you didn't create this account, you can ignore this email.</p>",
+  });
+
+  return { sent: true };
+}
+
+module.exports = { sendPasswordResetEmail, sendVerificationEmail };

@@ -301,6 +301,24 @@ button:disabled {
   margin-bottom: 16px;
 }
 
+/* A step still worth doing, not (yet) a mistake — --warn-bg is exactly the
+   "notice, but amber" register this calls for. */
+.account-verify-banner {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px;
+  border-radius: 6px;
+  background: var(--warn-bg);
+  font-size: 14px;
+  margin-bottom: 16px;
+}
+
+.turnstile-widget {
+  margin-bottom: 8px;
+}
+
 .language-select {
   padding: 4px 6px;
   font-size: 13px;

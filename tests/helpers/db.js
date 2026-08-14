@@ -23,9 +23,18 @@ async function resetDb() {
   await prisma.user.deleteMany();
 }
 
-async function createUser({ email, password = "password123", name }) {
+// Defaults to a verified account: most tests aren't exercising the
+// verification-gating behaviour itself and shouldn't have to think about it
+// (see tests/auth.test.js and tests/friends.test.js for the tests that
+// specifically pass verified: false).
+async function createUser({ email, password = "password123", name, verified = true }) {
   const passwordHash = await bcrypt.hash(password, 10);
-  return createUserWithUniquePublicId(prisma, { email, passwordHash, name });
+  return createUserWithUniquePublicId(prisma, {
+    email,
+    passwordHash,
+    name,
+    emailVerifiedAt: verified ? new Date() : null,
+  });
 }
 
 /** Makes (or upgrades) a Friendship row between two users to "accepted", for

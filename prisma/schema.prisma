@@ -37,6 +37,16 @@ model User {
   lockedUntil          DateTime?
   resetTokenHash       String?
   resetTokenExpiresAt  DateTime?
+  /// Null until the account's email is confirmed. Set immediately at
+  /// creation for a Google sign-in (Google already required
+  /// payload.email_verified), left null for a password signup until
+  /// POST /auth/verify-email consumes verifyTokenHash. The migration that
+  /// introduced this column backfilled every pre-existing row to its
+  /// createdAt — retroactively gating accounts that were already in use
+  /// before verification existed would be a regression, not a security fix.
+  emailVerifiedAt      DateTime?
+  verifyTokenHash      String?
+  verifyTokenExpiresAt DateTime?
   /// Encrypted (AES-256-GCM, key from TOKEN_ENCRYPTION_KEY) Google OAuth
   /// refresh token for the drive.file scope, set only once the user opts
   /// into Drive backup (src/routes/drive.js) — separate from sign-in, which

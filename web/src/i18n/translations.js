@@ -44,8 +44,15 @@ export const translations = {
     'resetPassword.invalidLink': 'This reset link is invalid. Request a new one.',
     'resetPassword.success': 'Password reset. You can now sign in.',
 
+    'verifyEmail.title': 'Verify your email',
+    'verifyEmail.success': 'Email verified. Thanks!',
+    'verifyEmail.invalidLink': 'This verification link is invalid or has expired.',
+    'verifyEmail.continueToApp': 'Continue to the app',
+
     'account.title': 'Account',
     'account.signedInAs': 'Signed in as',
+    'account.emailUnverified': "You haven't verified your email yet.",
+    'account.resendVerification': 'Resend verification email',
     'account.yourId': 'Your ID',
     'account.setCustomId': 'Choose your own ID',
     'account.customIdHint': '4-20 letters and numbers, no spaces. This can only be set once, so pick carefully.',
@@ -197,8 +204,15 @@ export const translations = {
     'resetPassword.invalidLink': 'ลิงก์นี้ไม่ถูกต้องหรือหมดอายุ กรุณาขอลิงก์ใหม่',
     'resetPassword.success': 'ตั้งรหัสผ่านใหม่สำเร็จ เข้าสู่ระบบได้เลย',
 
+    'verifyEmail.title': 'ยืนยันอีเมลของคุณ',
+    'verifyEmail.success': 'ยืนยันอีเมลสำเร็จ ขอบคุณค่ะ',
+    'verifyEmail.invalidLink': 'ลิงก์ยืนยันนี้ไม่ถูกต้องหรือหมดอายุแล้ว',
+    'verifyEmail.continueToApp': 'ไปที่แอป',
+
     'account.title': 'บัญชีผู้ใช้',
     'account.signedInAs': 'เข้าสู่ระบบในชื่อ',
+    'account.emailUnverified': 'คุณยังไม่ได้ยืนยันอีเมล',
+    'account.resendVerification': 'ส่งอีเมลยืนยันอีกครั้ง',
     'account.yourId': 'ID ของคุณ',
     'account.setCustomId': 'ตั้ง ID เอง',
     'account.customIdHint': 'ตัวอักษรและตัวเลข 4-20 ตัว ห้ามเว้นวรรค ตั้งได้ครั้งเดียวเท่านั้น เลือกให้ดี',
