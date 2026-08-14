@@ -77,6 +77,21 @@ export function deleteMessage(conversationId, messageId, token) {
   return apiFetch(`/chat/conversations/${conversationId}/messages/${messageId}`, { method: 'DELETE', token })
 }
 
+export function addReaction(conversationId, messageId, emoji, token) {
+  return apiFetch(`/chat/conversations/${conversationId}/messages/${messageId}/reactions`, {
+    method: 'POST',
+    body: { emoji },
+    token,
+  })
+}
+
+export function removeReaction(conversationId, messageId, emoji, token) {
+  return apiFetch(
+    `/chat/conversations/${conversationId}/messages/${messageId}/reactions/${encodeURIComponent(emoji)}`,
+    { method: 'DELETE', token }
+  )
+}
+
 export function markRead(conversationId, token) {
   return apiFetch(`/chat/conversations/${conversationId}/read`, { method: 'POST', token })
 }

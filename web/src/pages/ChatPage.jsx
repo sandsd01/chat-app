@@ -14,6 +14,8 @@ import {
   editMessage,
   deleteMessage,
   searchMessages,
+  addReaction,
+  removeReaction,
 } from '../api/chat'
 import { useDriveBackup } from '../hooks/useDriveBackup'
 import { EmojiPicker } from '../components/EmojiPicker'
@@ -76,6 +78,8 @@ export function ChatPage() {
     subscribeToTyping,
     subscribeToMessageEdited,
     subscribeToMessageDeleted,
+    subscribeToReactionAdded,
+    subscribeToReactionRemoved,
     markConversationRead,
     startChat,
   } = useChat()
@@ -160,6 +164,7 @@ export function ChatPage() {
   const [editingMessageId, setEditingMessageId] = useState(null)
   const [editingDraft, setEditingDraft] = useState('')
   const [emojiPickerOpen, setEmojiPickerOpen] = useState(false)
+  const [reactionPickerMessageId, setReactionPickerMessageId] = useState(null)
   const [uploadBusy, setUploadBusy] = useState(false)
   const [uploadError, setUploadError] = useState(null)
   const fileInputRef = useRef(null)
@@ -291,6 +296,7 @@ export function ChatPage() {
     setOtherTyping(false)
     setEditingMessageId(null)
     setEditingDraft('')
+    setReactionPickerMessageId(null)
     clearTimeout(typingClearTimerRef.current)
     if (!activeConversationId) return undefined
     return subscribeToTyping(activeConversationId, () => {
@@ -329,6 +335,58 @@ export function ChatPage() {
       )
     })
   }, [activeConversationId, subscribeToMessageDeleted])
+
+  // Both the reactor and the other participant get the same "reaction-added"/
+  // "reaction-removed" event (see src/routes/chat.js), so the UI is purely
+  // event-driven here rather than also patching state from the POST/DELETE
+  // response — one source of truth avoids double-applying the same reaction.
+  useEffect(() => {
+    if (!activeConversationId) return undefined
+    return subscribeToReactionAdded(activeConversationId, (payload) => {
+      setMessages((prev) =>
+        prev.map((m) => {
+          if (m.id !== payload.messageId) return m
+          const reactions = m.reactions ? [...m.reactions] : []
+          const idx = reactions.findIndex((r) => r.emoji === payload.emoji)
+          if (idx === -1) {
+            reactions.push({ emoji: payload.emoji, count: 1, mine: payload.userId === user.id })
+          } else {
+            reactions[idx] = {
+              ...reactions[idx],
+              count: reactions[idx].count + 1,
+              mine: reactions[idx].mine || payload.userId === user.id,
+            }
+          }
+          return { ...m, reactions }
+        })
+      )
+    })
+  }, [activeConversationId, subscribeToReactionAdded, user.id])
+
+  useEffect(() => {
+    if (!activeConversationId) return undefined
+    return subscribeToReactionRemoved(activeConversationId, (payload) => {
+      setMessages((prev) =>
+        prev.map((m) => {
+          if (m.id !== payload.messageId || !m.reactions) return m
+          const reactions = m.reactions
+            .map((r) =>
+              r.emoji === payload.emoji
+                ? { ...r, count: r.count - 1, mine: payload.userId === user.id ? false : r.mine }
+                : r
+            )
+            .filter((r) => r.count > 0)
+          return { ...m, reactions }
+        })
+      )
+    })
+  }, [activeConversationId, subscribeToReactionRemoved, user.id])
+
+  function toggleReaction(message, emoji) {
+    const alreadyMine = message.reactions?.find((r) => r.emoji === emoji)?.mine
+    const action = alreadyMine ? removeReaction : addReaction
+    action(activeConversationId, message.id, emoji, token).catch((err) => setMessagesError(err.message))
+  }
 
   function startEdit(message) {
     setEditingMessageId(message.id)
@@ -767,24 +825,66 @@ export function ChatPage() {
                                 </span>
                               </div>
                             )}
-                            {mine && !m.pending && !m.failed && !m.deletedAt && editingMessageId !== m.id && (
+                            {!m.deletedAt && m.reactions?.length > 0 && (
+                              <div className={`chat-bubble-reactions ${mine ? 'mine' : 'theirs'}`}>
+                                {m.reactions.map((r) => (
+                                  <button
+                                    key={r.emoji}
+                                    type="button"
+                                    className={`chat-reaction-pill${r.mine ? ' mine' : ''}`}
+                                    aria-pressed={r.mine}
+                                    aria-label={t('chat.reactionPillLabel', { emoji: r.emoji, count: r.count })}
+                                    onClick={() => toggleReaction(m, r.emoji)}
+                                  >
+                                    <span aria-hidden="true">{r.emoji}</span> {r.count}
+                                  </button>
+                                ))}
+                              </div>
+                            )}
+                            {!m.pending && !m.failed && !m.deletedAt && editingMessageId !== m.id && (
                               <div className="chat-bubble-actions">
-                                <button
-                                  type="button"
-                                  className="chat-bubble-action-btn"
-                                  aria-label={t('chat.editMessage')}
-                                  onClick={() => startEdit(m)}
-                                >
-                                  ✏️
-                                </button>
-                                <button
-                                  type="button"
-                                  className="chat-bubble-action-btn"
-                                  aria-label={t('chat.deleteMessage')}
-                                  onClick={() => handleDelete(m.id)}
-                                >
-                                  🗑️
-                                </button>
+                                <span className="chat-bubble-reaction-trigger-wrap">
+                                  <button
+                                    type="button"
+                                    className="chat-bubble-action-btn"
+                                    aria-label={t('chat.addReaction')}
+                                    aria-expanded={reactionPickerMessageId === m.id}
+                                    onClick={() =>
+                                      setReactionPickerMessageId((id) => (id === m.id ? null : m.id))
+                                    }
+                                  >
+                                    😊
+                                  </button>
+                                  {reactionPickerMessageId === m.id && (
+                                    <EmojiPicker
+                                      onSelect={(emoji) => {
+                                        setReactionPickerMessageId(null)
+                                        toggleReaction(m, emoji)
+                                      }}
+                                      onClose={() => setReactionPickerMessageId(null)}
+                                    />
+                                  )}
+                                </span>
+                                {mine && (
+                                  <>
+                                    <button
+                                      type="button"
+                                      className="chat-bubble-action-btn"
+                                      aria-label={t('chat.editMessage')}
+                                      onClick={() => startEdit(m)}
+                                    >
+                                      ✏️
+                                    </button>
+                                    <button
+                                      type="button"
+                                      className="chat-bubble-action-btn"
+                                      aria-label={t('chat.deleteMessage')}
+                                      onClick={() => handleDelete(m.id)}
+                                    >
+                                      🗑️
+                                    </button>
+                                  </>
+                                )}
                               </div>
                             )}
                             {m.failed && (

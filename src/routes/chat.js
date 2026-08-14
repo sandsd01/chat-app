@@ -256,6 +256,8 @@ router.get("/conversations/:id/messages", async (req, res) => {
   const hasMore = rows.length > limit;
   const page = rows.slice(0, limit);
 
+  const reactionsByMessage = await reactionsForMessages(page.map((m) => m.id), req.user.id);
+
   // Presigned GET URLs are minted fresh on every read rather than stored —
   // never a permanent link, and this route already only reaches rows for a
   // conversation the caller is confirmed a participant of (see
@@ -264,6 +266,7 @@ router.get("/conversations/:id/messages", async (req, res) => {
     page.map(async (m) => ({
       ...m,
       attachmentUrl: m.attachmentKey ? await createDownloadUrl(m.attachmentKey) : null,
+      reactions: reactionsByMessage.get(m.id) || [],
     }))
   );
 
@@ -531,6 +534,103 @@ router.delete("/conversations/:id/messages/:messageId", async (req, res) => {
   const payload = { id: updated.id, conversationId, deletedAt: updated.deletedAt };
   chatBus.publish(conversation.userAId, "message-deleted", payload);
   chatBus.publish(conversation.userBId, "message-deleted", payload);
+
+  res.json(payload);
+});
+
+// --- Reactions ----------------------------------------------------------
+// One row per (message, user, emoji) — see prisma/schema.prisma's
+// MessageReaction model for why that triple is the unique key. Either
+// participant can react to either side's message, unlike edit/delete which
+// are sender-only.
+
+const REACTION_EMOJI_MAX_LENGTH = 8;
+
+/** Rolls MessageReaction rows up into the {emoji, count, mine} summary GET .../messages embeds per message. */
+async function reactionsForMessages(messageIds, meId) {
+  const result = new Map();
+  if (messageIds.length === 0) return result;
+
+  const rows = await prisma.messageReaction.findMany({ where: { messageId: { in: messageIds } } });
+
+  const byMessage = new Map();
+  for (const row of rows) {
+    if (!byMessage.has(row.messageId)) byMessage.set(row.messageId, new Map());
+    const byEmoji = byMessage.get(row.messageId);
+    const entry = byEmoji.get(row.emoji) || { emoji: row.emoji, count: 0, mine: false };
+    entry.count += 1;
+    if (row.userId === meId) entry.mine = true;
+    byEmoji.set(row.emoji, entry);
+  }
+  for (const [messageId, byEmoji] of byMessage) {
+    result.set(messageId, [...byEmoji.values()]);
+  }
+  return result;
+}
+
+/** Same "does this message belong to this conversation" check edit/delete use, minus the sender-only restriction. */
+async function getMessageInConversation(conversationId, messageId) {
+  if (!Number.isInteger(messageId)) return null;
+  const message = await prisma.message.findUnique({ where: { id: messageId } });
+  if (!message || message.conversationId !== conversationId || message.deletedAt) return null;
+  return message;
+}
+
+router.post("/conversations/:id/messages/:messageId/reactions", async (req, res) => {
+  const conversationId = Number(req.params.id);
+  const conversation = await getConversationForParticipant(conversationId, req.user.id);
+  if (!conversation) return res.status(404).json({ error: "Conversation not found" });
+
+  const message = await getMessageInConversation(conversationId, Number(req.params.messageId));
+  if (!message) return res.status(404).json({ error: "Message not found" });
+
+  const emoji = typeof req.body?.emoji === "string" ? req.body.emoji.trim() : "";
+  if (!emoji || emoji.length > REACTION_EMOJI_MAX_LENGTH) {
+    return res
+      .status(400)
+      .json({ error: `emoji is required and must be ${REACTION_EMOJI_MAX_LENGTH} characters or fewer` });
+  }
+
+  // Idempotent add: reacting again with the same emoji is a no-op (200, no
+  // re-publish) rather than a duplicate row or a second event.
+  const existing = await prisma.messageReaction.findUnique({
+    where: { messageId_userId_emoji: { messageId: message.id, userId: req.user.id, emoji } },
+  });
+  const payload = { conversationId, messageId: message.id, emoji, userId: req.user.id };
+  if (existing) {
+    return res.status(200).json(payload);
+  }
+
+  await prisma.messageReaction.create({ data: { messageId: message.id, userId: req.user.id, emoji } });
+
+  chatBus.publish(conversation.userAId, "reaction-added", payload);
+  chatBus.publish(conversation.userBId, "reaction-added", payload);
+
+  res.status(201).json(payload);
+});
+
+router.delete("/conversations/:id/messages/:messageId/reactions/:emoji", async (req, res) => {
+  const conversationId = Number(req.params.id);
+  const conversation = await getConversationForParticipant(conversationId, req.user.id);
+  if (!conversation) return res.status(404).json({ error: "Conversation not found" });
+
+  const message = await getMessageInConversation(conversationId, Number(req.params.messageId));
+  if (!message) return res.status(404).json({ error: "Message not found" });
+
+  const emoji = req.params.emoji;
+
+  try {
+    await prisma.messageReaction.delete({
+      where: { messageId_userId_emoji: { messageId: message.id, userId: req.user.id, emoji } },
+    });
+  } catch (err) {
+    if (err.code === "P2025") return res.status(404).json({ error: "Reaction not found" });
+    throw err;
+  }
+
+  const payload = { conversationId, messageId: message.id, emoji, userId: req.user.id };
+  chatBus.publish(conversation.userAId, "reaction-removed", payload);
+  chatBus.publish(conversation.userBId, "reaction-removed", payload);
 
   res.json(payload);
 });

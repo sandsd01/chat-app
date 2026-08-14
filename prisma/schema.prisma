@@ -58,6 +58,7 @@ model User {
   sentFriendRequests   Friendship[]       @relation("FriendshipRequestedBy")
   pushSubscriptions    PushSubscription[]
   driveArchiveFiles    DriveArchiveFile[]
+  messageReactions     MessageReaction[]
 
   @@map("users")
 }
@@ -163,11 +164,34 @@ model Message {
   /// app never logging message content elsewhere either.
   deletedAt          DateTime?
 
-  conversation Conversation @relation(fields: [conversationId], references: [id])
-  sender       User         @relation("MessageSender", fields: [senderId], references: [id])
+  conversation Conversation      @relation(fields: [conversationId], references: [id])
+  sender       User              @relation("MessageSender", fields: [senderId], references: [id])
+  reactions    MessageReaction[]
 
   @@index([conversationId, createdAt])
   @@map("messages")
+}
+
+/// One user's single emoji reaction to one message. The unique triple is
+/// what makes POST .../reactions an idempotent add (react twice with the
+/// same emoji and nothing changes) while still letting the same user react
+/// to the same message with several different emoji. onDelete: Cascade on
+/// `message` matters here specifically because src/lib/drive.js's
+/// pruneArchivedMessages hard-deletes old Message rows once every
+/// participant has archived them — without cascade, a reacted-to message
+/// would fail to prune with a foreign key violation.
+model MessageReaction {
+  id        Int      @id @default(autoincrement())
+  messageId Int
+  userId    Int
+  emoji     String
+  createdAt DateTime @default(now())
+
+  message Message @relation(fields: [messageId], references: [id], onDelete: Cascade)
+  user    User    @relation(fields: [userId], references: [id])
+
+  @@unique([messageId, userId, emoji])
+  @@map("message_reactions")
 }
 
 /// One participant's own archive of one conversation, in their own Drive —

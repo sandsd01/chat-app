@@ -1070,6 +1070,47 @@ td:has(+ td) {
   padding: 2px 4px;
 }
 
+.chat-bubble-reaction-trigger-wrap {
+  position: relative;
+  display: inline-flex;
+}
+
+/* Unlike chat-bubble-actions, reaction pills are a persistent summary of who
+   reacted — always visible once there's at least one, not just on hover. */
+.chat-bubble-reactions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin-top: 4px;
+}
+
+.chat-bubble-reactions.mine {
+  justify-content: flex-end;
+}
+
+.chat-reaction-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 10px;
+  font-size: 12px;
+  line-height: 1.4;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  background: var(--bg-subtle);
+  color: var(--text);
+  cursor: pointer;
+}
+
+.chat-reaction-pill.mine {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+}
+
+.chat-reaction-pill:hover {
+  background: var(--bg-raised);
+}
+
 /* A failed send stays visible in the thread rather than vanishing — the
    outline and the retry text both carry the failure, since the bubble
    underneath is still solid accent-coloured. */

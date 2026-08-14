@@ -43,6 +43,8 @@ export function ChatProvider({ children }) {
   const typingListenersRef = useRef(new Map()) // conversationId -> Set<(payload) => void>
   const editedListenersRef = useRef(new Map()) // conversationId -> Set<(payload) => void>
   const deletedListenersRef = useRef(new Map()) // conversationId -> Set<(payload) => void>
+  const reactionAddedListenersRef = useRef(new Map()) // conversationId -> Set<(payload) => void>
+  const reactionRemovedListenersRef = useRef(new Map()) // conversationId -> Set<(payload) => void>
   const friendListenersRef = useRef(new Set())
   const esRef = useRef(null)
   const attemptRef = useRef(0)
@@ -102,6 +104,14 @@ export function ChatProvider({ children }) {
   )
   const subscribeToMessageDeleted = useCallback(
     (conversationId, callback) => subscribeViaMap(deletedListenersRef.current, conversationId, callback),
+    []
+  )
+  const subscribeToReactionAdded = useCallback(
+    (conversationId, callback) => subscribeViaMap(reactionAddedListenersRef.current, conversationId, callback),
+    []
+  )
+  const subscribeToReactionRemoved = useCallback(
+    (conversationId, callback) => subscribeViaMap(reactionRemovedListenersRef.current, conversationId, callback),
     []
   )
 
@@ -232,6 +242,22 @@ export function ChatProvider({ children }) {
         // ignore malformed payloads
       }
     })
+    es.addEventListener('reaction-added', (evt) => {
+      try {
+        const payload = JSON.parse(evt.data)
+        dispatchViaMap(reactionAddedListenersRef.current, payload.conversationId, payload)
+      } catch {
+        // ignore malformed payloads
+      }
+    })
+    es.addEventListener('reaction-removed', (evt) => {
+      try {
+        const payload = JSON.parse(evt.data)
+        dispatchViaMap(reactionRemovedListenersRef.current, payload.conversationId, payload)
+      } catch {
+        // ignore malformed payloads
+      }
+    })
     es.addEventListener('read', (evt) => {
       try {
         const payload = JSON.parse(evt.data)
@@ -329,6 +355,8 @@ export function ChatProvider({ children }) {
       subscribeToTyping,
       subscribeToMessageEdited,
       subscribeToMessageDeleted,
+      subscribeToReactionAdded,
+      subscribeToReactionRemoved,
       subscribeToFriendEvents,
       markConversationRead,
       startChat,
@@ -344,6 +372,8 @@ export function ChatProvider({ children }) {
       subscribeToTyping,
       subscribeToMessageEdited,
       subscribeToMessageDeleted,
+      subscribeToReactionAdded,
+      subscribeToReactionRemoved,
       subscribeToFriendEvents,
       markConversationRead,
       startChat,

@@ -721,6 +721,161 @@ describe("Chat API", () => {
     });
   });
 
+  describe("POST/DELETE /chat/conversations/:id/messages/:messageId/reactions", () => {
+    async function createConversation(token, userId) {
+      return request(app)
+        .post("/api/chat/conversations")
+        .set("Authorization", `Bearer ${token}`)
+        .send({ userId });
+    }
+
+    async function sendMessage(token, conversationId, body) {
+      return request(app)
+        .post(`/api/chat/conversations/${conversationId}/messages`)
+        .set("Authorization", `Bearer ${token}`)
+        .send({ body });
+    }
+
+    test("POST requires authentication", async () => {
+      const res = await request(app).post("/api/chat/conversations/1/messages/1/reactions").send({ emoji: "👍" });
+      assert.equal(res.status, 401);
+    });
+
+    test("POST 404 for a non-participant", async () => {
+      const conv = await createConversation(adminToken, staffUser.id);
+      const msg = await sendMessage(adminToken, conv.body.id, "hi");
+      const res = await request(app)
+        .post(`/api/chat/conversations/${conv.body.id}/messages/${msg.body.id}/reactions`)
+        .set("Authorization", `Bearer ${otherToken}`)
+        .send({ emoji: "👍" });
+      assert.equal(res.status, 404);
+    });
+
+    test("POST 400 on a missing or oversized emoji", async () => {
+      const conv = await createConversation(adminToken, staffUser.id);
+      const msg = await sendMessage(adminToken, conv.body.id, "hi");
+
+      const missing = await request(app)
+        .post(`/api/chat/conversations/${conv.body.id}/messages/${msg.body.id}/reactions`)
+        .set("Authorization", `Bearer ${adminToken}`)
+        .send({});
+      assert.equal(missing.status, 400);
+
+      const oversized = await request(app)
+        .post(`/api/chat/conversations/${conv.body.id}/messages/${msg.body.id}/reactions`)
+        .set("Authorization", `Bearer ${adminToken}`)
+        .send({ emoji: "x".repeat(9) });
+      assert.equal(oversized.status, 400);
+    });
+
+    test("either participant can react to either side's message; 201 then 200 on a repeat react", async () => {
+      const conv = await createConversation(adminToken, staffUser.id);
+      const msg = await sendMessage(adminToken, conv.body.id, "hi");
+
+      const staffWaiter = waitForEvent(staffUser.id, "reaction-added");
+      const adminWaiter = waitForEvent(adminUser.id, "reaction-added");
+
+      const first = await request(app)
+        .post(`/api/chat/conversations/${conv.body.id}/messages/${msg.body.id}/reactions`)
+        .set("Authorization", `Bearer ${staffToken}`)
+        .send({ emoji: "👍" });
+      assert.equal(first.status, 201);
+
+      const staffPayload = await staffWaiter;
+      const adminPayload = await adminWaiter;
+      assert.deepEqual(
+        { conversationId: staffPayload.conversationId, messageId: staffPayload.messageId, emoji: staffPayload.emoji, userId: staffPayload.userId },
+        { conversationId: conv.body.id, messageId: msg.body.id, emoji: "👍", userId: staffUser.id }
+      );
+      assert.deepEqual(adminPayload, staffPayload, "both participants get the same event, including the reactor");
+
+      // Repeat: idempotent, no re-publish, 200 not 201.
+      const noEventWaiter = waitForEvent(staffUser.id, "reaction-added", 200).catch((err) => err);
+      const second = await request(app)
+        .post(`/api/chat/conversations/${conv.body.id}/messages/${msg.body.id}/reactions`)
+        .set("Authorization", `Bearer ${staffToken}`)
+        .send({ emoji: "👍" });
+      assert.equal(second.status, 200);
+      assert.ok((await noEventWaiter) instanceof Error, "a repeat react must not re-publish");
+
+      const rows = await prisma.messageReaction.findMany({ where: { messageId: msg.body.id } });
+      assert.equal(rows.length, 1, "must not create a duplicate row");
+    });
+
+    test("DELETE 404 when the caller never reacted with that emoji", async () => {
+      const conv = await createConversation(adminToken, staffUser.id);
+      const msg = await sendMessage(adminToken, conv.body.id, "hi");
+      const res = await request(app)
+        .delete(`/api/chat/conversations/${conv.body.id}/messages/${msg.body.id}/reactions/👍`)
+        .set("Authorization", `Bearer ${adminToken}`);
+      assert.equal(res.status, 404);
+    });
+
+    test("DELETE removes only the caller's own reaction and publishes reaction-removed to both", async () => {
+      const conv = await createConversation(adminToken, staffUser.id);
+      const msg = await sendMessage(adminToken, conv.body.id, "hi");
+      await request(app)
+        .post(`/api/chat/conversations/${conv.body.id}/messages/${msg.body.id}/reactions`)
+        .set("Authorization", `Bearer ${staffToken}`)
+        .send({ emoji: "👍" });
+      await request(app)
+        .post(`/api/chat/conversations/${conv.body.id}/messages/${msg.body.id}/reactions`)
+        .set("Authorization", `Bearer ${adminToken}`)
+        .send({ emoji: "👍" });
+
+      const staffWaiter = waitForEvent(staffUser.id, "reaction-removed");
+      const adminWaiter = waitForEvent(adminUser.id, "reaction-removed");
+
+      const res = await request(app)
+        .delete(`/api/chat/conversations/${conv.body.id}/messages/${msg.body.id}/reactions/👍`)
+        .set("Authorization", `Bearer ${staffToken}`);
+      assert.equal(res.status, 200);
+
+      const staffPayload = await staffWaiter;
+      const adminPayload = await adminWaiter;
+      assert.equal(staffPayload.userId, staffUser.id);
+      assert.deepEqual(adminPayload, staffPayload);
+
+      const rows = await prisma.messageReaction.findMany({ where: { messageId: msg.body.id } });
+      assert.equal(rows.length, 1, "only staff's reaction must be gone");
+      assert.equal(rows[0].userId, adminUser.id);
+    });
+
+    test("GET messages includes a reactions summary with emoji/count/mine", async () => {
+      const conv = await createConversation(adminToken, staffUser.id);
+      const msg = await sendMessage(adminToken, conv.body.id, "hi");
+      await request(app)
+        .post(`/api/chat/conversations/${conv.body.id}/messages/${msg.body.id}/reactions`)
+        .set("Authorization", `Bearer ${staffToken}`)
+        .send({ emoji: "👍" });
+      await request(app)
+        .post(`/api/chat/conversations/${conv.body.id}/messages/${msg.body.id}/reactions`)
+        .set("Authorization", `Bearer ${adminToken}`)
+        .send({ emoji: "👍" });
+      await request(app)
+        .post(`/api/chat/conversations/${conv.body.id}/messages/${msg.body.id}/reactions`)
+        .set("Authorization", `Bearer ${adminToken}`)
+        .send({ emoji: "🔥" });
+
+      const asStaff = await request(app)
+        .get(`/api/chat/conversations/${conv.body.id}/messages`)
+        .set("Authorization", `Bearer ${staffToken}`);
+      const staffView = asStaff.body.data.find((m) => m.id === msg.body.id).reactions;
+      const thumbsUpStaff = staffView.find((r) => r.emoji === "👍");
+      assert.equal(thumbsUpStaff.count, 2);
+      assert.equal(thumbsUpStaff.mine, true);
+      const fireStaff = staffView.find((r) => r.emoji === "🔥");
+      assert.equal(fireStaff.count, 1);
+      assert.equal(fireStaff.mine, false);
+
+      const asAdmin = await request(app)
+        .get(`/api/chat/conversations/${conv.body.id}/messages`)
+        .set("Authorization", `Bearer ${adminToken}`);
+      const adminView = asAdmin.body.data.find((m) => m.id === msg.body.id).reactions;
+      assert.equal(adminView.find((r) => r.emoji === "🔥").mine, true);
+    });
+  });
+
   describe("POST /chat/conversations/:id/read", () => {
     async function createConversation(token, userId) {
       return request(app)
