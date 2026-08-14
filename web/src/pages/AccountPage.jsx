@@ -1,7 +1,7 @@
 import { useState } from 'react'
-import { useSearchParams } from 'react-router-dom'
+import { useNavigate, useSearchParams } from 'react-router-dom'
 import { apiFetch } from '../api/client'
-import { setCustomPublicId } from '../api/users'
+import { setCustomPublicId, deleteAccount } from '../api/users'
 import { useAuth } from '../context/AuthContext'
 import { useLanguage } from '../context/LanguageContext'
 import { usePushSubscription } from '../hooks/usePushSubscription'
@@ -18,14 +18,18 @@ const DRIVE_ERROR_KEYS = {
 }
 
 export function AccountPage() {
-  const { token, user, updateUser } = useAuth()
+  const { token, user, updateUser, logout } = useAuth()
   const { t } = useLanguage()
+  const navigate = useNavigate()
   const [currentPassword, setCurrentPassword] = useState('')
   const [newPassword, setNewPassword] = useState('')
   const [error, setError] = useState(null)
   const [message, setMessage] = useState(null)
   const [loading, setLoading] = useState(false)
   const [searchParams] = useSearchParams()
+
+  const [deleteBusy, setDeleteBusy] = useState(false)
+  const [deleteError, setDeleteError] = useState(null)
 
   const [customId, setCustomId] = useState('')
   const [customIdError, setCustomIdError] = useState(null)
@@ -71,6 +75,24 @@ export function AccountPage() {
       setResendError(err.message)
     } finally {
       setResendBusy(false)
+    }
+  }
+
+  // Backend refuses (409) rather than deleting once the account has any
+  // chat history (src/routes/users.js#DELETE /users/me) — a DM thread has
+  // no "detach and keep going" story. That message is shown as-is, not
+  // rephrased, since it's already written for this exact screen.
+  async function handleDeleteAccount() {
+    if (!window.confirm(t('account.confirmDeleteAccount'))) return
+    setDeleteError(null)
+    setDeleteBusy(true)
+    try {
+      await deleteAccount(token)
+      logout()
+      navigate('/login')
+    } catch (err) {
+      setDeleteError(err.message)
+      setDeleteBusy(false)
     }
   }
 
@@ -227,6 +249,19 @@ export function AccountPage() {
         <p className="friends-caption">{t('common.passwordHint')}</p>
         <button type="submit" disabled={loading}>
           {loading ? t('common.loading') : t(user?.hasPassword ? 'account.updatePassword' : 'account.setPassword')}
+        </button>
+
+        <hr className="section-divider" />
+        <h2>{t('account.dangerZone')}</h2>
+        <p className="friends-caption">{t('account.deleteAccountHint')}</p>
+        {deleteError && <p className="error" role="alert">{deleteError}</p>}
+        <button
+          type="button"
+          className="btn-secondary-danger"
+          disabled={deleteBusy}
+          onClick={handleDeleteAccount}
+        >
+          {deleteBusy ? t('common.loading') : t('account.deleteAccount')}
         </button>
       </form>
     </div>

@@ -93,6 +93,11 @@ export const translations = {
     'account.updatePassword': 'Update password',
     'account.passwordUpdated': 'Password updated.',
     'account.passwordSet': 'Password set. You can now log in with your ID and password.',
+    'account.dangerZone': 'Danger zone',
+    'account.deleteAccountHint':
+      "Permanently deletes your account. This isn't possible while you have any conversations or sent messages.",
+    'account.deleteAccount': 'Delete account',
+    'account.confirmDeleteAccount': 'Delete your account? This cannot be undone.',
 
     'chat.title': 'Messages',
     'chat.searchPlaceholder': 'Search friends',
@@ -262,6 +267,10 @@ export const translations = {
     'account.updatePassword': 'อัปเดตรหัสผ่าน',
     'account.passwordUpdated': 'อัปเดตรหัสผ่านเรียบร้อยแล้ว',
     'account.passwordSet': 'ตั้งรหัสผ่านเรียบร้อยแล้ว ตอนนี้ล็อกอินด้วยไอดีและรหัสผ่านได้แล้ว',
+    'account.dangerZone': 'โซนอันตราย',
+    'account.deleteAccountHint': 'ลบบัญชีของคุณอย่างถาวร ทำไม่ได้หากคุณยังมีการสนทนาหรือเคยส่งข้อความไว้',
+    'account.deleteAccount': 'ลบบัญชี',
+    'account.confirmDeleteAccount': 'ลบบัญชีของคุณ? การกระทำนี้ไม่สามารถย้อนกลับได้',
 
     'chat.title': 'ข้อความ',
     'chat.searchPlaceholder': 'ค้นหาเพื่อน',
