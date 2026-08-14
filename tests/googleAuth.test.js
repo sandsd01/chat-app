@@ -206,7 +206,7 @@ describe("Google OAuth", () => {
       assert.match(res.body.error, /Google/);
     });
 
-    test("PATCH /auth/password on a Google-only account 400s instead of crashing", async (t) => {
+    test("PATCH /auth/password on a Google-only account sets a first password rather than erroring", async (t) => {
       mockGoogleIdentity(t, { sub: "google-sub-nopass2", email: "nopassword2@test.com", email_verified: true });
       const agent = request.agent(app);
       const state = parseQuery((await agent.get("/api/auth/google")).headers.location).state;
@@ -214,11 +214,18 @@ describe("Google OAuth", () => {
       const ticket = parseQuery(callback.headers.location).ticket;
       const { body } = await request(app).post("/api/auth/google/exchange").send({ ticket });
 
+      // No currentPassword needed — there is no existing password to prove
+      // knowledge of; the caller's JWT already proves it's their own account.
       const res = await request(app)
         .patch("/api/auth/password")
         .set("Authorization", `Bearer ${body.token}`)
-        .send({ currentPassword: "whatever", newPassword: "newpassword123" });
-      assert.equal(res.status, 400);
+        .send({ newPassword: "newpassword123" });
+      assert.equal(res.status, 200);
+
+      const login = await request(app)
+        .post("/api/auth/login")
+        .send({ email: "nopassword2@test.com", password: "newpassword123" });
+      assert.equal(login.status, 200);
     });
   });
 });

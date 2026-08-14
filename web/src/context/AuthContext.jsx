@@ -50,8 +50,8 @@ export function AuthProvider({ children }) {
     }
   }, [token])
 
-  async function login(email, password) {
-    const data = await apiFetch('/auth/login', { method: 'POST', body: { email, password } })
+  async function login(identifier, password) {
+    const data = await apiFetch('/auth/login', { method: 'POST', body: { identifier, password } })
     setToken(data.token)
     setUser(data.user)
   }

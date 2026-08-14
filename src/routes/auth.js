@@ -37,6 +37,7 @@ function publicUser(user) {
     email: user.email,
     name: user.name,
     emailVerifiedAt: user.emailVerifiedAt,
+    hasPassword: Boolean(user.passwordHash),
   };
 }
 
@@ -233,14 +234,21 @@ router.post("/signup", authLimiter, async (req, res) => {
 });
 
 router.post("/login", authLimiter, async (req, res) => {
-  const { email, password } = req.body || {};
-  if (!email || !password) {
-    return res.status(400).json({ error: "email and password are required" });
+  const { password } = req.body || {};
+  const identifier = req.body?.identifier || req.body?.email;
+  if (!identifier || !password) {
+    return res.status(400).json({ error: "identifier and password are required" });
   }
 
-  const user = await prisma.user.findUnique({ where: { email } });
+  // Same email-shape detection already used elsewhere in this file — anything
+  // that isn't email-shaped is treated as a publicId lookup, uppercased to
+  // match how publicIds are always stored (see src/lib/publicId.js and
+  // GET /friends/lookup's identical .toUpperCase() normalization).
+  const user = EMAIL_RE.test(identifier)
+    ? await prisma.user.findUnique({ where: { email: identifier } })
+    : await prisma.user.findUnique({ where: { publicId: identifier.toUpperCase() } });
   if (!user) {
-    return res.status(401).json({ error: "Invalid email or password" });
+    return res.status(401).json({ error: "Invalid ID/email or password" });
   }
 
   if (user.lockedUntil && user.lockedUntil > new Date()) {
@@ -274,7 +282,7 @@ router.post("/login", authLimiter, async (req, res) => {
         error: "Account locked due to too many failed login attempts. Try again later.",
       });
     }
-    return res.status(401).json({ error: "Invalid email or password" });
+    return res.status(401).json({ error: "Invalid ID/email or password" });
   }
 
   if (user.failedLoginAttempts > 0 || user.lockedUntil) {
@@ -347,26 +355,31 @@ router.post("/logout", (_req, res) => {
 
 router.patch("/password", authenticate, async (req, res) => {
   const { currentPassword, newPassword } = req.body || {};
-  if (!currentPassword || !newPassword) {
-    return res.status(400).json({ error: "currentPassword and newPassword are required" });
+  if (!newPassword) {
+    return res.status(400).json({ error: "newPassword is required" });
   }
   if (newPassword.length < 8) {
     return res.status(400).json({ error: "newPassword must be at least 8 characters" });
   }
 
   const user = await prisma.user.findUnique({ where: { id: req.user.id } });
-  if (!user.passwordHash) {
-    return res.status(400).json({ error: "This account signs in with Google and has no password to change" });
-  }
-  const valid = await bcrypt.compare(currentPassword, user.passwordHash);
-  if (!valid) {
-    return res.status(401).json({ error: "Current password is incorrect" });
+  // A Google-only account (passwordHash null) has nothing to verify against —
+  // this is *setting* its first password, not changing one, so currentPassword
+  // isn't required. An account that already has a password still needs it.
+  if (user.passwordHash) {
+    if (!currentPassword) {
+      return res.status(400).json({ error: "currentPassword is required" });
+    }
+    const valid = await bcrypt.compare(currentPassword, user.passwordHash);
+    if (!valid) {
+      return res.status(401).json({ error: "Current password is incorrect" });
+    }
   }
 
   const passwordHash = await bcrypt.hash(newPassword, 10);
   await prisma.user.update({ where: { id: user.id }, data: { passwordHash } });
 
-  res.json({ message: "Password updated" });
+  res.json({ message: user.passwordHash ? "Password updated" : "Password set" });
 });
 
 router.post("/forgot-password", authLimiter, async (req, res) => {

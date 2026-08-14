@@ -2,7 +2,9 @@ const crypto = require("node:crypto");
 const { test, describe, beforeEach } = require("node:test");
 const assert = require("node:assert/strict");
 const request = require("supertest");
+const jwt = require("jsonwebtoken");
 const { resetDb, createUser, prisma } = require("./helpers/db");
+const { createUserWithUniquePublicId } = require("../src/lib/publicId");
 const app = require("../src/app");
 
 function hashToken(token) {
@@ -206,9 +208,11 @@ describe("GET /auth/captcha-config", () => {
 });
 
 describe("POST /auth/login", () => {
+  let alice;
+
   beforeEach(async () => {
     await resetDb();
-    await createUser({ email: "alice@test.com", password: "alicepass1" });
+    alice = await createUser({ email: "alice@test.com", password: "alicepass1" });
   });
 
   test("returns a token and user for valid credentials", async () => {
@@ -219,6 +223,7 @@ describe("POST /auth/login", () => {
     assert.ok(res.body.token);
     assert.equal(res.body.user.email, "alice@test.com");
     assert.equal(res.body.user.passwordHash, undefined);
+    assert.equal(res.body.user.hasPassword, true);
   });
 
   test("rejects an incorrect password", async () => {
@@ -238,6 +243,28 @@ describe("POST /auth/login", () => {
   test("requires email and password", async () => {
     const res = await request(app).post("/api/auth/login").send({});
     assert.equal(res.status, 400);
+  });
+
+  test("logs in with the account's publicId as the identifier, instead of email", async () => {
+    const res = await request(app)
+      .post("/api/auth/login")
+      .send({ identifier: alice.publicId, password: "alicepass1" });
+    assert.equal(res.status, 200);
+    assert.equal(res.body.user.email, "alice@test.com");
+  });
+
+  test("publicId login is case-insensitive", async () => {
+    const res = await request(app)
+      .post("/api/auth/login")
+      .send({ identifier: alice.publicId.toLowerCase(), password: "alicepass1" });
+    assert.equal(res.status, 200);
+  });
+
+  test("rejects an unknown publicId", async () => {
+    const res = await request(app)
+      .post("/api/auth/login")
+      .send({ identifier: "ZZZZZZZZ", password: "alicepass1" });
+    assert.equal(res.status, 401);
   });
 });
 
@@ -331,6 +358,64 @@ describe("PATCH /auth/password", () => {
       .patch("/api/auth/password")
       .set("Authorization", `Bearer ${token}`)
       .send({ currentPassword: "alicepass1", newPassword: "short" });
+    assert.equal(res.status, 400);
+  });
+});
+
+describe("PATCH /auth/password, setting a first password on a Google-only account", () => {
+  let googleUser;
+  let token;
+
+  beforeEach(async () => {
+    await resetDb();
+    googleUser = await createUserWithUniquePublicId(prisma, {
+      email: "googleuser@test.com",
+      googleId: "google-sub-test",
+      emailVerifiedAt: new Date(),
+    });
+    token = jwt.sign({ sub: googleUser.id, email: googleUser.email }, process.env.JWT_SECRET, { expiresIn: "8h" });
+  });
+
+  test("GET /auth/me reports hasPassword: false before a password is set", async () => {
+    const res = await request(app).get("/api/auth/me").set("Authorization", `Bearer ${token}`);
+    assert.equal(res.body.hasPassword, false);
+  });
+
+  test("sets a password without requiring currentPassword", async () => {
+    const res = await request(app)
+      .patch("/api/auth/password")
+      .set("Authorization", `Bearer ${token}`)
+      .send({ newPassword: "newpassword1" });
+    assert.equal(res.status, 200);
+  });
+
+  test("the new password then logs in, including by publicId", async () => {
+    await request(app)
+      .patch("/api/auth/password")
+      .set("Authorization", `Bearer ${token}`)
+      .send({ newPassword: "newpassword1" });
+
+    const res = await request(app)
+      .post("/api/auth/login")
+      .send({ identifier: googleUser.publicId, password: "newpassword1" });
+    assert.equal(res.status, 200);
+  });
+
+  test("GET /auth/me reports hasPassword: true after a password is set", async () => {
+    await request(app)
+      .patch("/api/auth/password")
+      .set("Authorization", `Bearer ${token}`)
+      .send({ newPassword: "newpassword1" });
+
+    const res = await request(app).get("/api/auth/me").set("Authorization", `Bearer ${token}`);
+    assert.equal(res.body.hasPassword, true);
+  });
+
+  test("rejects a newPassword shorter than 8 characters", async () => {
+    const res = await request(app)
+      .patch("/api/auth/password")
+      .set("Authorization", `Bearer ${token}`)
+      .send({ newPassword: "short" });
     assert.equal(res.status, 400);
   });
 });

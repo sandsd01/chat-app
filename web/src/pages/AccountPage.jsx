@@ -79,15 +79,14 @@ export function AccountPage() {
     setError(null)
     setMessage(null)
     setLoading(true)
+    const settingFirstPassword = !user?.hasPassword
     try {
-      await apiFetch('/auth/password', {
-        method: 'PATCH',
-        body: { currentPassword, newPassword },
-        token,
-      })
-      setMessage(t('account.passwordUpdated'))
+      const body = settingFirstPassword ? { newPassword } : { currentPassword, newPassword }
+      await apiFetch('/auth/password', { method: 'PATCH', body, token })
+      setMessage(t(settingFirstPassword ? 'account.passwordSet' : 'account.passwordUpdated'))
       setCurrentPassword('')
       setNewPassword('')
+      if (settingFirstPassword) updateUser({ hasPassword: true })
     } catch (err) {
       setError(err.message)
     } finally {
@@ -200,18 +199,21 @@ export function AccountPage() {
         )}
 
         <hr className="section-divider" />
-        <h2>{t('account.changePassword')}</h2>
+        <h2>{t(user?.hasPassword ? 'account.changePassword' : 'account.setPassword')}</h2>
+        {!user?.hasPassword && <p className="friends-caption">{t('account.setPasswordHint')}</p>}
         {error && <p className="error">{error}</p>}
         {message && <p className="notice">{message}</p>}
-        <label>
-          {t('account.currentPassword')}
-          <input
-            type="password"
-            value={currentPassword}
-            onChange={(e) => setCurrentPassword(e.target.value)}
-            required
-          />
-        </label>
+        {user?.hasPassword && (
+          <label>
+            {t('account.currentPassword')}
+            <input
+              type="password"
+              value={currentPassword}
+              onChange={(e) => setCurrentPassword(e.target.value)}
+              required
+            />
+          </label>
+        )}
         <label>
           {t('account.newPassword')}
           <input
@@ -223,7 +225,7 @@ export function AccountPage() {
           />
         </label>
         <button type="submit" disabled={loading}>
-          {loading ? '…' : t('account.updatePassword')}
+          {loading ? '…' : t(user?.hasPassword ? 'account.updatePassword' : 'account.setPassword')}
         </button>
       </form>
     </div>

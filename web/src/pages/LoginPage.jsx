@@ -12,7 +12,7 @@ const OAUTH_ERROR_KEYS = {
 }
 
 export function LoginPage() {
-  const [email, setEmail] = useState('')
+  const [identifier, setIdentifier] = useState('')
   const [password, setPassword] = useState('')
   const [error, setError] = useState(null)
   const [loading, setLoading] = useState(false)
@@ -31,7 +31,7 @@ export function LoginPage() {
     setError(null)
     setLoading(true)
     try {
-      await login(email, password)
+      await login(identifier, password)
       navigate('/')
     } catch (err) {
       setError(err.message)
@@ -59,11 +59,12 @@ export function LoginPage() {
         {oauthError && <p className="error">{oauthError}</p>}
         {error && <p className="error">{error}</p>}
         <label>
-          {t('login.email')}
+          {t('login.identifier')}
           <input
-            type="email"
-            value={email}
-            onChange={(e) => setEmail(e.target.value)}
+            type="text"
+            autoComplete="username"
+            value={identifier}
+            onChange={(e) => setIdentifier(e.target.value)}
             required
           />
         </label>

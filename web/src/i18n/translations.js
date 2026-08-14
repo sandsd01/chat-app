@@ -15,6 +15,7 @@ export const translations = {
 
     'login.title': 'Sign in',
     'login.email': 'Email',
+    'login.identifier': 'Email or ID',
     'login.password': 'Password',
     'login.submit': 'Sign in',
     'login.submitting': 'Signing in…',
@@ -82,10 +83,13 @@ export const translations = {
     'account.driveErrorUnconfigured': 'Google Drive backup is not configured on this server.',
     'account.driveErrorGeneric': 'Something went wrong connecting Google Drive.',
     'account.changePassword': 'Change password',
+    'account.setPassword': 'Set password',
+    'account.setPasswordHint': "You signed in with Google and don't have a password yet. Set one to also be able to log in with your ID.",
     'account.currentPassword': 'Current password',
     'account.newPassword': 'New password',
     'account.updatePassword': 'Update password',
     'account.passwordUpdated': 'Password updated.',
+    'account.passwordSet': 'Password set. You can now log in with your ID and password.',
 
     'chat.title': 'Messages',
     'chat.searchPlaceholder': 'Search friends',
@@ -175,6 +179,7 @@ export const translations = {
 
     'login.title': 'เข้าสู่ระบบ',
     'login.email': 'อีเมล',
+    'login.identifier': 'อีเมลหรือไอดี',
     'login.password': 'รหัสผ่าน',
     'login.submit': 'เข้าสู่ระบบ',
     'login.submitting': 'กำลังเข้าสู่ระบบ…',
@@ -242,10 +247,13 @@ export const translations = {
     'account.driveErrorUnconfigured': 'เซิร์ฟเวอร์นี้ยังไม่ได้ตั้งค่าการสำรองข้อมูลลง Google Drive',
     'account.driveErrorGeneric': 'เกิดข้อผิดพลาดขณะเชื่อมต่อ Google Drive',
     'account.changePassword': 'เปลี่ยนรหัสผ่าน',
+    'account.setPassword': 'ตั้งรหัสผ่าน',
+    'account.setPasswordHint': 'คุณเข้าสู่ระบบด้วย Google และยังไม่มีรหัสผ่าน ตั้งรหัสผ่านเพื่อให้ล็อกอินด้วยไอดีได้ด้วย',
     'account.currentPassword': 'รหัสผ่านปัจจุบัน',
     'account.newPassword': 'รหัสผ่านใหม่',
     'account.updatePassword': 'อัปเดตรหัสผ่าน',
     'account.passwordUpdated': 'อัปเดตรหัสผ่านเรียบร้อยแล้ว',
+    'account.passwordSet': 'ตั้งรหัสผ่านเรียบร้อยแล้ว ตอนนี้ล็อกอินด้วยไอดีและรหัสผ่านได้แล้ว',
 
     'chat.title': 'ข้อความ',
     'chat.searchPlaceholder': 'ค้นหาเพื่อน',
