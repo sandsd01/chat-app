@@ -3,6 +3,7 @@ import { Link, useSearchParams } from 'react-router-dom'
 import { apiFetch } from '../api/client'
 import { useAuth } from '../context/AuthContext'
 import { useLanguage } from '../context/LanguageContext'
+import { AuthBrand } from '../components/AuthBrand'
 
 // 'pending' | 'success' | 'error'
 export function VerifyEmailPage() {
@@ -39,10 +40,7 @@ export function VerifyEmailPage() {
 
   return (
     <div className="centered">
-      <div className="auth-brand">
-        <span className="auth-brand-mark" aria-hidden="true">💬</span>
-        {t('common.appName')}
-      </div>
+      <AuthBrand />
       <div className="card">
         <h1>{t('verifyEmail.title')}</h1>
         {status === 'pending' && <p className="hint">{t('common.loading')}</p>}

@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react'
 import { Link, useNavigate, useSearchParams } from 'react-router-dom'
 import { useAuth } from '../context/AuthContext'
 import { useLanguage } from '../context/LanguageContext'
+import { AuthBrand } from '../components/AuthBrand'
 
 export function OAuthCallbackPage() {
   const [searchParams] = useSearchParams()
@@ -35,6 +36,7 @@ export function OAuthCallbackPage() {
 
   return (
     <div className="centered">
+      <AuthBrand />
       <div className="card">
         {error ? (
           <>

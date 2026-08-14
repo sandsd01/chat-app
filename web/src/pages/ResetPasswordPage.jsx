@@ -2,6 +2,7 @@ import { useState } from 'react'
 import { Link, useSearchParams } from 'react-router-dom'
 import { apiFetch } from '../api/client'
 import { useLanguage } from '../context/LanguageContext'
+import { AuthBrand } from '../components/AuthBrand'
 
 export function ResetPasswordPage() {
   const { t } = useLanguage()
@@ -35,10 +36,7 @@ export function ResetPasswordPage() {
   if (!email || !token) {
     return (
       <div className="centered">
-        <div className="auth-brand">
-          <span className="auth-brand-mark" aria-hidden="true">💬</span>
-          {t('common.appName')}
-        </div>
+        <AuthBrand />
         <div className="card">
           <h1>{t('resetPassword.title')}</h1>
           <p className="error">{t('resetPassword.invalidLink')}</p>
@@ -50,10 +48,7 @@ export function ResetPasswordPage() {
 
   return (
     <div className="centered">
-      <div className="auth-brand">
-        <span className="auth-brand-mark" aria-hidden="true">💬</span>
-        {t('common.appName')}
-      </div>
+      <AuthBrand />
       <form className="card" onSubmit={handleSubmit}>
         <h1>{t('resetPassword.title')}</h1>
         {error && <p className="error">{error}</p>}

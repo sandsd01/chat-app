@@ -3,6 +3,7 @@ import { useAuth } from '../context/AuthContext'
 import { useLanguage } from '../context/LanguageContext'
 import { useChat } from '../context/ChatContext'
 import { useFriends } from '../context/FriendsContext'
+import { AuthBrand } from './AuthBrand'
 
 export function Layout() {
   const { user, logout } = useAuth()
@@ -19,6 +20,7 @@ export function Layout() {
   return (
     <div className="layout">
       <nav className="navbar" aria-label={t('nav.mainNavigation')}>
+        <AuthBrand compact />
         <NavLink to="/chat" className={({isActive}) => isActive ? "active" : undefined}>
           {t('nav.chat')}
           {unreadTotal > 0 && (

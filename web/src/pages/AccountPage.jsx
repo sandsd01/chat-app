@@ -6,6 +6,7 @@ import { useAuth } from '../context/AuthContext'
 import { useLanguage } from '../context/LanguageContext'
 import { usePushSubscription } from '../hooks/usePushSubscription'
 import { useDriveBackup } from '../hooks/useDriveBackup'
+import { TicketId } from '../components/TicketId'
 
 const PUBLIC_ID_PATTERN = /^[a-zA-Z0-9]{4,20}$/
 
@@ -101,9 +102,8 @@ export function AccountPage() {
         <p>
           {t('account.signedInAs')} <strong>{user?.name || user?.email}</strong>
         </p>
-        <p>
-          {t('account.yourId')} <code className="friends-id-code">{user?.publicId}</code>
-        </p>
+        <p className="friends-caption">{t('account.yourId')}</p>
+        <TicketId id={user?.publicId} copyLabel={t('friends.copy')} copiedLabel={t('friends.copied')} />
 
         {!user?.emailVerifiedAt && (
           <div className="account-verify-banner">

@@ -4,6 +4,7 @@ import { useAuth } from '../context/AuthContext'
 import { useLanguage } from '../context/LanguageContext'
 import { apiFetch } from '../api/client'
 import { Turnstile } from '../components/Turnstile'
+import { AuthBrand } from '../components/AuthBrand'
 
 export function SignupPage() {
   const [email, setEmail] = useState('')
@@ -46,10 +47,7 @@ export function SignupPage() {
 
   return (
     <div className="centered">
-      <div className="auth-brand">
-        <span className="auth-brand-mark" aria-hidden="true">💬</span>
-        {t('common.appName')}
-      </div>
+      <AuthBrand />
       <form className="card" onSubmit={handleSubmit}>
         <h1>{t('signup.title')}</h1>
         {error && <p className="error">{error}</p>}

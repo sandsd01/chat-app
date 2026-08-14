@@ -5,6 +5,7 @@ import { useLanguage } from '../context/LanguageContext'
 import { useChat } from '../context/ChatContext'
 import { useFriends } from '../context/FriendsContext'
 import { lookupByPublicId } from '../api/friends'
+import { TicketId } from '../components/TicketId'
 
 function initials(nameOrEmail) {
   const source = (nameOrEmail || '').trim()
@@ -33,20 +34,12 @@ export function FriendsPage() {
   } = useFriends()
   const navigate = useNavigate()
 
-  const [copied, setCopied] = useState(false)
   const [lookupId, setLookupId] = useState('')
   const [lookupResult, setLookupResult] = useState(null)
   const [lookupError, setLookupError] = useState(null)
   const [lookupLoading, setLookupLoading] = useState(false)
   const [actionError, setActionError] = useState(null)
   const [busyId, setBusyId] = useState(null)
-
-  function copyOwnId() {
-    navigator.clipboard?.writeText(user.publicId).then(() => {
-      setCopied(true)
-      setTimeout(() => setCopied(false), 1500)
-    })
-  }
 
   async function handleLookup(e) {
     e.preventDefault()
@@ -106,12 +99,7 @@ export function FriendsPage() {
 
       <div className="card card-wide friends-own-id">
         <span className="friends-caption">{t('friends.yourId')}</span>
-        <div className="friends-own-id-row">
-          <code className="friends-id-code">{user.publicId}</code>
-          <button type="button" className="btn-secondary" onClick={copyOwnId}>
-            {copied ? t('friends.copied') : t('friends.copy')}
-          </button>
-        </div>
+        <TicketId id={user.publicId} copyLabel={t('friends.copy')} copiedLabel={t('friends.copied')} />
         <p className="friends-caption">{t('friends.shareHint')}</p>
       </div>
 

@@ -1,32 +1,58 @@
+/* ---- "The Claim Ticket" design tokens -------------------------------------
+   This app's whole mechanic is a private code handed from one person to
+   another (no public directory, no groups) — closer to a claim check than a
+   social feed. The palette/type system below draws from personal
+   correspondence and postal artifacts (ink, paper, a stamped mark) rather
+   than the generic SaaS-violet look this replaces. --accent carries that
+   "ink" role everywhere it's already used (buttons, links, focus ring); the
+   new --seal is intentionally NOT a second general-purpose accent — it's
+   reserved for the TicketId component alone, so the one bold color choice
+   stays in the one place it's meant to be noticed. */
 :root {
-  --text: #1c1b22;
-  --text-muted: #57525f;
-  --bg: #fff;
-  --bg-subtle: #f5f4f8;
+  --text: #211f1c;
+  --text-muted: #5c574f;
+  --bg: #fbfaf8;
+  --bg-subtle: #f1eee7;
   --bg-raised: #fff;
-  --border: #d9d7de;
-  --border-strong: #b9b6c2;
-  --accent: #6d28d9;
-  --accent-hover: #5b21b6;
-  --accent-soft: #f2ecfd;
+  --border: #dedad1;
+  --border-strong: #b6afa0;
+  --accent: #22315c;
+  --accent-hover: #33447a;
+  --accent-soft: #e7eaf3;
   --danger: #b3261e;
   --danger-bg: #fdeceb;
   --ok: #17643f;
   --ok-bg: #e6f4ec;
   --warn-bg: #fdf1dc;
-  --ring: #6d28d9;
+  --ring: var(--accent);
+  --seal: #7a2a33;
 
   /* Text painted on a solid --accent or --danger fill (buttons, chat
      bubbles, unread badges, the active nav pill). White works while those
-     are the light-mode's saturated purple/red, but dark mode turns both
-     pale (lavender / salmon) — white-on-pale drops to ~2:1. Fixed here
-     instead of every filled surface hardcoding #fff. */
+     are the light-mode's saturated ink/red, but dark mode turns --accent
+     pale (periwinkle) — white-on-pale drops to ~2:1. Fixed here instead of
+     every filled surface hardcoding #fff. */
   --accent-contrast: #fff;
 
   /* Every control is at least this tall — a comfortable tap target on
      mobile, and 36px targets get mis-hit. */
   --tap: 46px;
-  --radius: 10px;
+  --radius: 8px;
+  --radius-sm: 4px;
+
+  /* Tinted with --accent at low opacity ("paper casting a soft shadow")
+     rather than generic grey — this file had exactly one box-shadow before
+     this pass. Kept to two steps, used only on genuinely raised surfaces
+     (cards, popovers, the ticket stub), not everywhere. */
+  --shadow-sm: 0 1px 3px rgba(34, 49, 92, 0.1), 0 1px 2px rgba(34, 49, 92, 0.06);
+  --shadow-md: 0 4px 16px rgba(34, 49, 92, 0.14);
+
+  /* Structural/label role (wordmark, eyebrows, timestamps, the ticket
+     code) — never used for paragraphs. Self-hosted, see main.jsx. */
+  --font-mono: 'IBM Plex Mono', ui-monospace, 'SFMono-Regular', Menlo, monospace;
+  /* Reading role, scoped to message-bubble body text only — everywhere
+     else (buttons, inputs, lists) stays on the system sans below. */
+  --font-serif: 'Source Serif 4', Georgia, 'Times New Roman', serif;
 
   font: 17px/1.55 system-ui, 'Segoe UI', Roboto, sans-serif;
   color-scheme: light dark;
@@ -38,22 +64,28 @@
   :root {
     --text: #edecf1;
     --text-muted: #a8a3b3;
-    --bg: #15161c;
-    --bg-subtle: #1e1f27;
-    --bg-raised: #24252f;
+    --bg: #181a22;
+    --bg-subtle: #1c1e29;
+    --bg-raised: #20222c;
     --border: #34363f;
     --border-strong: #4a4c58;
-    --accent: #c4a2fd;
-    --accent-hover: #d3bafe;
-    --accent-soft: #2a2140;
+    --accent: #8fa3e8;
+    --accent-hover: #a9baf0;
+    --accent-soft: #26304a;
     --danger: #ff9d95;
     --danger-bg: #3d1f1d;
     --ok: #7fdcab;
     --ok-bg: #14301f;
     --warn-bg: #3a2f16;
-    --ring: #c4a2fd;
+    --ring: var(--accent);
+    --seal: #d98a93;
 
-    --accent-contrast: #15161c;
+    --accent-contrast: #181a22;
+
+    /* A low-opacity ink tint reads as nothing against a dark surface —
+       shadows here are plain black at higher opacity instead. */
+    --shadow-sm: 0 1px 3px rgba(0, 0, 0, 0.4), 0 1px 2px rgba(0, 0, 0, 0.3);
+    --shadow-md: 0 4px 16px rgba(0, 0, 0, 0.5);
   }
 }
 
@@ -66,12 +98,17 @@ body {
 }
 
 h1 {
-  font-size: 28px;
+  font-family: var(--font-mono);
+  font-weight: 500;
+  letter-spacing: -0.01em;
+  font-size: 26px;
   margin: 0 0 16px;
 }
 
 h2 {
-  font-size: 18px;
+  font-family: var(--font-mono);
+  font-weight: 500;
+  font-size: 16px;
   margin: 0 0 12px;
 }
 
@@ -135,10 +172,12 @@ a {
 .auth-brand {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: 10px;
   margin-bottom: 20px;
-  font-size: 20px;
-  font-weight: 700;
+  font-family: var(--font-mono);
+  font-size: 18px;
+  font-weight: 500;
+  letter-spacing: 0.02em;
   color: var(--text);
 }
 
@@ -146,12 +185,28 @@ a {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 36px;
-  height: 36px;
-  border-radius: 10px;
+  width: 32px;
+  height: 32px;
+  border-radius: var(--radius-sm);
   background: var(--accent);
   color: var(--accent-contrast);
-  font-size: 18px;
+  font-family: var(--font-mono);
+  font-weight: 500;
+  font-size: 16px;
+}
+
+/* Layout.jsx's navbar — smaller, inline with nav links, no page-hero
+   spacing below it. */
+.auth-brand.compact {
+  gap: 8px;
+  margin-bottom: 0;
+  font-size: 15px;
+}
+
+.auth-brand.compact .auth-brand-mark {
+  width: 26px;
+  height: 26px;
+  font-size: 13px;
 }
 
 /* A labeled rule between the primary sign-in action and "Continue with
@@ -177,7 +232,8 @@ a {
 .card {
   background: var(--bg-subtle);
   border: 1px solid var(--border);
-  border-radius: 8px;
+  border-radius: var(--radius);
+  box-shadow: var(--shadow-sm);
   padding: 24px;
   width: 100%;
   max-width: 400px;
@@ -189,14 +245,6 @@ a {
 .inline-form {
   max-width: none;
   margin-bottom: 24px;
-}
-
-label {
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-  font-size: 14px;
-  text-align: left;
 }
 
 input,
@@ -261,44 +309,14 @@ button:disabled {
   padding: 8px 14px;
   background: var(--accent);
   color: var(--accent-contrast);
-  border-radius: 6px;
+  border-radius: var(--radius);
   text-decoration: none;
   font-weight: 500;
-}
-
-.error {
-  color: var(--danger);
-  background: var(--danger-bg);
-  padding: 8px 12px;
-  border-radius: 6px;
-  font-size: 14px;
-}
-
-.table {
-  width: 100%;
-  border-collapse: collapse;
-}
-
-.table th,
-.table td {
-  text-align: left;
-  padding: 8px 12px;
-  border-bottom: 1px solid var(--border);
 }
 
 .search-input {
   width: 100%;
   max-width: 320px;
-}
-
-.notice {
-  color: var(--accent);
-  background: var(--bg-subtle);
-  border: 1px solid var(--border);
-  padding: 8px 12px;
-  border-radius: 6px;
-  font-size: 14px;
-  margin-bottom: 16px;
 }
 
 /* A step still worth doing, not (yet) a mistake — --warn-bg is exactly the
@@ -309,7 +327,7 @@ button:disabled {
   align-items: center;
   gap: 8px;
   padding: 8px 12px;
-  border-radius: 6px;
+  border-radius: var(--radius-sm);
   background: var(--warn-bg);
   font-size: 14px;
   margin-bottom: 16px;
@@ -322,11 +340,6 @@ button:disabled {
 .language-select {
   padding: 4px 6px;
   font-size: 13px;
-}
-
-.hint {
-  font-size: 13px;
-  color: var(--text-muted);
 }
 
 /* ---- Clarity pass -------------------------------------------------------
@@ -383,6 +396,9 @@ button.btn-secondary-danger:hover:not(:disabled) {
 
 /* Labels were 14px and easy to skip past when filling a form in a hurry. */
 label {
+  display: flex;
+  flex-direction: column;
+  text-align: left;
   font-size: 15px;
   font-weight: 550;
   gap: 6px;
@@ -431,6 +447,10 @@ td:has(+ td) {
   flex-wrap: nowrap;
   overflow-x: auto;
   scrollbar-width: thin;
+}
+
+.navbar .auth-brand.compact {
+  margin-right: 10px;
 }
 
 .navbar > * {
@@ -544,20 +564,65 @@ td:has(+ td) {
   color: var(--text-muted);
 }
 
-.friends-own-id-row {
+/* ---- TicketId (the "claim ticket" signature element) ----------------------
+   See web/src/components/TicketId.jsx for why this exists and where it's
+   used — deliberately exactly two places, never spread further. */
+.ticket-id {
   display: flex;
   align-items: center;
   gap: 12px;
+  flex-wrap: wrap;
 }
 
-.friends-id-code {
-  font-size: 22px;
-  font-weight: 700;
-  letter-spacing: 0.08em;
-  padding: 8px 14px;
+.ticket-id-stub {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 12px 18px;
+  background: var(--bg-raised);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  box-shadow: var(--shadow-sm);
+}
+
+/* Two half-circle "punches," coloured to match the surface this ticket sits
+   on (a --bg-subtle card, in both places it's used) — the coupon/claim-check
+   cue that this piece was torn off a perforated sheet. */
+.ticket-id-stub::before,
+.ticket-id-stub::after {
+  content: '';
+  position: absolute;
+  left: -8px;
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
   background: var(--bg-subtle);
   border: 1px solid var(--border);
-  border-radius: var(--radius);
+}
+
+.ticket-id-stub::before {
+  top: -9px;
+}
+
+.ticket-id-stub::after {
+  bottom: -9px;
+}
+
+.ticket-id-mark {
+  flex-shrink: 0;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--seal);
+}
+
+.ticket-id-code {
+  font-family: var(--font-mono);
+  font-weight: 500;
+  font-size: 19px;
+  letter-spacing: 0.12em;
+  color: var(--text);
   font-variant-numeric: tabular-nums;
 }
 
@@ -751,6 +816,7 @@ td:has(+ td) {
 }
 
 .chat-timestamp {
+  font-family: var(--font-mono);
   font-size: 12px;
   color: var(--text-muted);
   white-space: nowrap;
@@ -956,6 +1022,7 @@ td:has(+ td) {
 }
 
 .chat-date-separator span {
+  font-family: var(--font-mono);
   font-size: 12px;
   font-weight: 600;
   color: var(--text-muted);
@@ -998,7 +1065,7 @@ td:has(+ td) {
 
 .chat-bubble {
   padding: 10px 14px;
-  border-radius: 16px;
+  border-radius: 10px;
   font-size: 15px;
   line-height: 1.5;
   word-break: break-word;
@@ -1023,6 +1090,7 @@ td:has(+ td) {
 .chat-bubble-time {
   display: block;
   margin-top: 4px;
+  font-family: var(--font-mono);
   font-size: 11px;
   font-variant-numeric: tabular-nums;
   color: var(--text-muted);
@@ -1225,8 +1293,8 @@ td:has(+ td) {
   padding: 8px;
   background: var(--bg-raised);
   border: 1px solid var(--border);
-  border-radius: 8px;
-  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.15);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow-md);
 }
 
 .emoji-picker-item {
