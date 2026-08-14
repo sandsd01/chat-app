@@ -50,14 +50,14 @@ export function LoginPage() {
             className="language-select"
             value={language}
             onChange={(e) => setLanguage(e.target.value)}
-            aria-label="Language"
+            aria-label={t('nav.language')}
           >
             <option value="en">EN</option>
             <option value="th">ไทย</option>
           </select>
         </div>
-        {oauthError && <p className="error">{oauthError}</p>}
-        {error && <p className="error">{error}</p>}
+        {oauthError && <p className="error" role="alert">{oauthError}</p>}
+        {error && <p className="error" role="alert">{error}</p>}
         <label>
           {t('login.identifier')}
           <input

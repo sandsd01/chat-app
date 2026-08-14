@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
+import { useLanguage } from '../context/LanguageContext'
 
 // A flat, curated set rather than a full Unicode emoji library/package: the
 // composer just needs "pick a common emoji and insert it into the text I'm
@@ -72,6 +73,11 @@ export function EmojiPicker({ onSelect, onClose }) {
   const ref = useRef(null)
   const buttonRefs = useRef([])
   const [activeIndex, setActiveIndex] = useState(0)
+  const { t } = useLanguage()
+  // Whatever had focus when this picker opened — almost always the trigger
+  // button that rendered it. Captured once at mount via useRef's lazy
+  // initializer, not on every render.
+  const triggerRef = useRef(document.activeElement)
 
   useEffect(() => {
     function handlePointerDown(e) {
@@ -85,6 +91,11 @@ export function EmojiPicker({ onSelect, onClose }) {
     return () => {
       document.removeEventListener('mousedown', handlePointerDown)
       document.removeEventListener('keydown', handleKeyDown)
+      // Whether this closes via Escape, an outside click, or picking an
+      // emoji, it always ends in this component unmounting — so returning
+      // focus here (rather than in each dismissal path) covers all of them
+      // and keeps a keyboard user from losing their place.
+      triggerRef.current?.focus?.()
     }
   }, [onClose])
 
@@ -118,7 +129,7 @@ export function EmojiPicker({ onSelect, onClose }) {
   }
 
   return (
-    <div className="emoji-picker" ref={ref} role="grid" aria-label="Emoji picker" onKeyDown={handleGridKeyDown}>
+    <div className="emoji-picker" ref={ref} role="grid" aria-label={t('chat.emojiPickerGrid')} onKeyDown={handleGridKeyDown}>
       {EMOJI.map((emoji, index) => (
         <button
           type="button"

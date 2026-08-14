@@ -19,6 +19,9 @@ export function Layout() {
 
   return (
     <div className="layout">
+      <a href="#main-content" className="skip-link">
+        {t('nav.skipToContent')}
+      </a>
       <nav className="navbar" aria-label={t('nav.mainNavigation')}>
         <AuthBrand compact />
         <NavLink to="/chat" className={({isActive}) => isActive ? "active" : undefined}>
@@ -44,7 +47,7 @@ export function Layout() {
           className="language-select"
           value={language}
           onChange={(e) => setLanguage(e.target.value)}
-          aria-label="Language"
+          aria-label={t('nav.language')}
         >
           <option value="en">EN</option>
           <option value="th">ไทย</option>
@@ -58,7 +61,7 @@ export function Layout() {
           </>
         )}
       </nav>
-      <main className="content">
+      <main id="main-content" className="content" tabIndex={-1}>
         <Outlet />
       </main>
     </div>

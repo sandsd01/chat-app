@@ -45,7 +45,7 @@ export function VerifyEmailPage() {
         <h1>{t('verifyEmail.title')}</h1>
         {status === 'pending' && <p className="hint">{t('common.loading')}</p>}
         {status === 'success' && <p className="notice">{t('verifyEmail.success')}</p>}
-        {status === 'error' && <p className="error">{error || t('verifyEmail.invalidLink')}</p>}
+        {status === 'error' && <p className="error" role="alert">{error || t('verifyEmail.invalidLink')}</p>}
         <Link to={user ? '/chat' : '/login'}>
           {user ? t('verifyEmail.continueToApp') : t('login.backToLogin')}
         </Link>

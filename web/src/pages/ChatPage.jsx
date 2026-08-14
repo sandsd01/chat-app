@@ -146,6 +146,10 @@ export function ChatPage() {
   // way (see the load effect below).
   const [driveHasMore, setDriveHasMore] = useState(false)
   const [loadingOlder, setLoadingOlder] = useState(false)
+  // Announced through a visually-hidden live region below — loadOlder()
+  // prepends messages above the current scroll position with no visible
+  // change a screen-reader user would otherwise notice.
+  const [olderLoadAnnouncement, setOlderLoadAnnouncement] = useState('')
   const [draft, setDraft] = useState('')
   const [editingMessageId, setEditingMessageId] = useState(null)
   const [editingDraft, setEditingDraft] = useState('')
@@ -456,6 +460,7 @@ export function ChatPage() {
         setHasMore(res.hasMore)
         setNextBefore(res.nextBefore)
       }
+      setOlderLoadAnnouncement(t('chat.olderMessagesLoaded', { count: res.data.length }))
       requestAnimationFrame(() => {
         if (el) el.scrollTop = el.scrollHeight - prevScrollHeight
       })
@@ -568,14 +573,15 @@ export function ChatPage() {
               type="search"
               className="search-input"
               placeholder={t('chat.searchPlaceholder')}
+              aria-label={t('chat.searchPlaceholder')}
               value={query}
               onChange={(e) => setQuery(e.target.value)}
             />
           </div>
 
           <div className="chat-list-scroll">
-            {conversationsError && <p className="error">{t('chat.loadError')}</p>}
-            {startError && <p className="error">{startError}</p>}
+            {conversationsError && <p className="error" role="alert">{t('chat.loadError')}</p>}
+            {startError && <p className="error" role="alert">{startError}</p>}
 
             {showFriendsSection && (
               <>
@@ -687,6 +693,7 @@ export function ChatPage() {
                     className="search-input"
                     autoFocus
                     placeholder={t('chat.searchInConversationPlaceholder')}
+                    aria-label={t('chat.searchInConversationPlaceholder')}
                     value={searchQuery}
                     onChange={(e) => setSearchQuery(e.target.value)}
                   />
@@ -704,10 +711,13 @@ export function ChatPage() {
                 </div>
               )}
 
+              <div role="status" aria-live="polite" className="sr-only">
+                {olderLoadAnnouncement}
+              </div>
               <div className="chat-messages" ref={messagesElRef} onScroll={handleScroll}>
                 {searchOpen && searchQuery.trim() ? (
                   <div className="chat-search-results">
-                    {searchError && <p className="error">{searchError}</p>}
+                    {searchError && <p className="error" role="alert">{searchError}</p>}
                     {searchLoading ? (
                       <p className="hint">{t('common.loading')}</p>
                     ) : searchResults && searchResults.length === 0 ? (
@@ -727,7 +737,7 @@ export function ChatPage() {
                   </div>
                 ) : (
                   <>
-                {messagesError && <p className="error">{messagesError}</p>}
+                {messagesError && <p className="error" role="alert">{messagesError}</p>}
                 {(hasMore || driveHasMore) && (
                   <button type="button" className="chat-load-more" onClick={loadOlder} disabled={loadingOlder}>
                     {loadingOlder
@@ -899,13 +909,14 @@ export function ChatPage() {
                 {otherTyping && t('chat.typingIndicator', { name: threadHeaderName })}
               </div>
 
-              {uploadError && <p className="error">{uploadError}</p>}
+              {uploadError && <p className="error" role="alert">{uploadError}</p>}
               <form className="chat-composer" onSubmit={handleSend}>
                 <div className="chat-composer-emoji-wrap">
                   <button
                     type="button"
                     className="chat-composer-emoji-btn"
                     aria-label={t('chat.emojiPicker')}
+                    aria-expanded={emojiPickerOpen}
                     onClick={() => setEmojiPickerOpen((open) => !open)}
                   >
                     😊
@@ -927,11 +938,11 @@ export function ChatPage() {
                 <button
                   type="button"
                   className="chat-composer-attach-btn"
-                  aria-label={t('chat.attachFile')}
+                  aria-label={uploadBusy ? t('common.loading') : t('chat.attachFile')}
                   disabled={uploadBusy}
                   onClick={() => fileInputRef.current?.click()}
                 >
-                  {uploadBusy ? '…' : '📎'}
+                  <span aria-hidden="true">{uploadBusy ? '…' : '📎'}</span>
                 </button>
                 <input
                   type="text"
@@ -941,6 +952,7 @@ export function ChatPage() {
                     notifyTyping()
                   }}
                   placeholder={t('chat.composerPlaceholder')}
+                  aria-label={t('chat.composerPlaceholder')}
                   maxLength={4000}
                 />
                 <button type="submit" disabled={!draft.trim() || messagesLoading}>

@@ -40,7 +40,7 @@ export function OAuthCallbackPage() {
       <div className="card">
         {error ? (
           <>
-            <p className="error">{error}</p>
+            <p className="error" role="alert">{error}</p>
             <Link to="/login">{t('login.backToLogin')}</Link>
           </>
         ) : (

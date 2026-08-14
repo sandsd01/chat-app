@@ -111,7 +111,7 @@ export function AccountPage() {
             ) : (
               <>
                 <span>{t('account.emailUnverified')}</span>
-                {resendError && <span className="error">{resendError}</span>}
+                {resendError && <span className="error" role="alert">{resendError}</span>}
                 <button type="button" className="btn-secondary" disabled={resendBusy} onClick={handleResendVerification}>
                   {resendBusy ? t('common.loading') : t('account.resendVerification')}
                 </button>
@@ -126,7 +126,7 @@ export function AccountPage() {
               <p className="notice">{t('account.customIdSuccess')}</p>
             ) : (
               <div className="account-custom-id">
-                {customIdError && <p className="error">{customIdError}</p>}
+                {customIdError && <p className="error" role="alert">{customIdError}</p>}
                 <p className="friends-caption">{t('account.customIdHint')}</p>
                 <input
                   type="text"
@@ -145,7 +145,7 @@ export function AccountPage() {
 
         <hr className="section-divider" />
         <h2>{t('account.notifications')}</h2>
-        {push.error && <p className="error">{push.error}</p>}
+        {push.error && <p className="error" role="alert">{push.error}</p>}
         {push.status === 'unsupported' && <p className="friends-caption">{t('account.pushUnsupported')}</p>}
         {push.status === 'denied' && <p className="friends-caption">{t('account.pushDenied')}</p>}
         {push.status === 'unsubscribed' && (
@@ -165,8 +165,8 @@ export function AccountPage() {
         <hr className="section-divider" />
         <h2>{t('account.driveBackup')}</h2>
         <p className="friends-caption">{t('account.driveBackupDescription')}</p>
-        {driveError && <p className="error">{driveError}</p>}
-        {drive.error && <p className="error">{drive.error}</p>}
+        {driveError && <p className="error" role="alert">{driveError}</p>}
+        {drive.error && <p className="error" role="alert">{drive.error}</p>}
         {drive.status === 'connected' && (
           <>
             <p className="notice">
@@ -201,7 +201,7 @@ export function AccountPage() {
         <hr className="section-divider" />
         <h2>{t(user?.hasPassword ? 'account.changePassword' : 'account.setPassword')}</h2>
         {!user?.hasPassword && <p className="friends-caption">{t('account.setPasswordHint')}</p>}
-        {error && <p className="error">{error}</p>}
+        {error && <p className="error" role="alert">{error}</p>}
         {message && <p className="notice">{message}</p>}
         {user?.hasPassword && (
           <label>

@@ -39,7 +39,7 @@ export function ResetPasswordPage() {
         <AuthBrand />
         <div className="card">
           <h1>{t('resetPassword.title')}</h1>
-          <p className="error">{t('resetPassword.invalidLink')}</p>
+          <p className="error" role="alert">{t('resetPassword.invalidLink')}</p>
           <Link to="/forgot-password">{t('login.forgotPassword')}</Link>
         </div>
       </div>
@@ -51,7 +51,7 @@ export function ResetPasswordPage() {
       <AuthBrand />
       <form className="card" onSubmit={handleSubmit}>
         <h1>{t('resetPassword.title')}</h1>
-        {error && <p className="error">{error}</p>}
+        {error && <p className="error" role="alert">{error}</p>}
         {message ? (
           <>
             <p className="notice">{message}</p>

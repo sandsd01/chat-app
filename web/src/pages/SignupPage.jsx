@@ -50,7 +50,7 @@ export function SignupPage() {
       <AuthBrand />
       <form className="card" onSubmit={handleSubmit}>
         <h1>{t('signup.title')}</h1>
-        {error && <p className="error">{error}</p>}
+        {error && <p className="error" role="alert">{error}</p>}
         <label>
           {t('signup.name')}
           <input type="text" value={name} onChange={(e) => setName(e.target.value)} />

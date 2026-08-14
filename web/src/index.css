@@ -410,6 +410,25 @@ label {
   margin-bottom: 4px;
 }
 
+/* Off-screen until focused (Tab from the top of the page lands here first) —
+   lets a keyboard/screen-reader user jump straight past the nav instead of
+   tabbing through every link on every single page load. */
+.skip-link {
+  position: absolute;
+  top: -40px;
+  left: 8px;
+  z-index: 100;
+  padding: 8px 14px;
+  background: var(--bg-raised);
+  color: var(--accent);
+  border: 1px solid var(--border-strong);
+  border-radius: 8px;
+}
+
+.skip-link:focus {
+  top: 8px;
+}
+
 /* Nav: show where you are, and give links a real hit area. Scrolls sideways
    rather than wrapping — a wrapped nav pushes items onto their own line and
    shifts the whole page down. */

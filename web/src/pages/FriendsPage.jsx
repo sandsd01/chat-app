@@ -32,7 +32,10 @@ export function FriendsPage() {
   const [lookupError, setLookupError] = useState(null)
   const [lookupLoading, setLookupLoading] = useState(false)
   const [actionError, setActionError] = useState(null)
-  const [busyId, setBusyId] = useState(null)
+  // Keyed by "action:id" (e.g. "accept:42"), not just id, so two different
+  // actions on the same row (Remove vs Block) don't both light up as busy
+  // when only one of them was actually clicked.
+  const [busyKey, setBusyKey] = useState(null)
 
   async function handleLookup(e) {
     e.preventDefault()
@@ -65,25 +68,22 @@ export function FriendsPage() {
     }
   }
 
-  async function runAction(id, fn) {
+  async function runAction(key, fn) {
     setActionError(null)
-    setBusyId(id)
+    setBusyKey(key)
     try {
-      await fn()
+      return await fn()
     } catch (err) {
       setActionError(err.message)
+      return undefined
     } finally {
-      setBusyId(null)
+      setBusyKey(null)
     }
   }
 
-  async function handleMessage(friendUser) {
-    try {
-      const summary = await startChat(friendUser.id)
-      navigate(`/chat/${summary.id}`)
-    } catch (err) {
-      setActionError(err.message)
-    }
+  async function handleMessage(key, friendUser) {
+    const summary = await runAction(key, () => startChat(friendUser.id))
+    if (summary) navigate(`/chat/${summary.id}`)
   }
 
   return (
@@ -103,6 +103,7 @@ export function FriendsPage() {
             type="text"
             className="search-input"
             placeholder={t('friends.addPlaceholder')}
+            aria-label={t('friends.addPlaceholder')}
             value={lookupId}
             onChange={(e) => setLookupId(e.target.value)}
           />
@@ -110,10 +111,10 @@ export function FriendsPage() {
             {lookupLoading ? t('common.loading') : t('friends.find')}
           </button>
         </form>
-        {lookupError && <p className="error">{lookupError}</p>}
-        {actionError && <p className="error">{actionError}</p>}
+        {lookupError && <p className="error" role="alert">{lookupError}</p>}
+        {actionError && <p className="error" role="alert">{actionError}</p>}
         {lookupResult && (
-          <div className="friend-row">
+          <div className="friend-row" role="status" aria-live="polite">
             <span className="chat-avatar">{initials(lookupResult.name || lookupResult.email)}</span>
             <span className="chat-conversation-main">
               <span className="chat-conversation-name">{lookupResult.name || lookupResult.email}</span>
@@ -150,18 +151,18 @@ export function FriendsPage() {
                   </span>
                   <button
                     type="button"
-                    disabled={busyId === r.requestId}
-                    onClick={() => runAction(r.requestId, () => acceptRequest(r.requestId))}
+                    disabled={busyKey === `accept:${r.requestId}`}
+                    onClick={() => runAction(`accept:${r.requestId}`, () => acceptRequest(r.requestId))}
                   >
-                    {t('friends.accept')}
+                    {busyKey === `accept:${r.requestId}` ? t('common.loading') : t('friends.accept')}
                   </button>
                   <button
                     type="button"
                     className="btn-secondary"
-                    disabled={busyId === r.requestId}
-                    onClick={() => runAction(r.requestId, () => declineRequest(r.requestId))}
+                    disabled={busyKey === `decline:${r.requestId}`}
+                    onClick={() => runAction(`decline:${r.requestId}`, () => declineRequest(r.requestId))}
                   >
-                    {t('friends.decline')}
+                    {busyKey === `decline:${r.requestId}` ? t('common.loading') : t('friends.decline')}
                   </button>
                 </div>
               ))}
@@ -180,10 +181,10 @@ export function FriendsPage() {
                   <button
                     type="button"
                     className="btn-secondary"
-                    disabled={busyId === r.requestId}
-                    onClick={() => runAction(r.requestId, () => cancelRequest(r.requestId))}
+                    disabled={busyKey === `cancel:${r.requestId}`}
+                    onClick={() => runAction(`cancel:${r.requestId}`, () => cancelRequest(r.requestId))}
                   >
-                    {t('friends.cancel')}
+                    {busyKey === `cancel:${r.requestId}` ? t('common.loading') : t('friends.cancel')}
                   </button>
                 </div>
               ))}
@@ -194,7 +195,7 @@ export function FriendsPage() {
 
       <div className="card card-wide">
         <h2>{t('friends.listTitle')}</h2>
-        {error && <p className="error">{t('friends.loadError')}</p>}
+        {error && <p className="error" role="alert">{t('friends.loadError')}</p>}
         {loading && friends.length === 0 ? (
           <p className="hint">{t('common.loading')}</p>
         ) : friends.length === 0 ? (
@@ -206,34 +207,38 @@ export function FriendsPage() {
               <span className="chat-conversation-main">
                 <span className="chat-conversation-name">{f.otherUser.name || f.otherUser.email}</span>
               </span>
-              <button type="button" onClick={() => handleMessage(f.otherUser)}>
-                {t('friends.message')}
+              <button
+                type="button"
+                disabled={busyKey === `message:${f.friendshipId}`}
+                onClick={() => handleMessage(`message:${f.friendshipId}`, f.otherUser)}
+              >
+                {busyKey === `message:${f.friendshipId}` ? t('common.loading') : t('friends.message')}
               </button>
               <button
                 type="button"
                 className="btn-secondary"
-                disabled={busyId === f.friendshipId}
+                disabled={busyKey === `remove:${f.friendshipId}`}
                 onClick={() => {
                   const name = f.otherUser.name || f.otherUser.email
                   if (window.confirm(t('friends.confirmRemove', { name }))) {
-                    runAction(f.friendshipId, () => removeFriend(f.otherUser.id))
+                    runAction(`remove:${f.friendshipId}`, () => removeFriend(f.otherUser.id))
                   }
                 }}
               >
-                {t('friends.remove')}
+                {busyKey === `remove:${f.friendshipId}` ? t('common.loading') : t('friends.remove')}
               </button>
               <button
                 type="button"
                 className="btn-secondary-danger"
-                disabled={busyId === f.friendshipId}
+                disabled={busyKey === `block:${f.friendshipId}`}
                 onClick={() => {
                   const name = f.otherUser.name || f.otherUser.email
                   if (window.confirm(t('friends.confirmBlock', { name }))) {
-                    runAction(f.friendshipId, () => blockUser(f.otherUser.id))
+                    runAction(`block:${f.friendshipId}`, () => blockUser(f.otherUser.id))
                   }
                 }}
               >
-                {t('friends.block')}
+                {busyKey === `block:${f.friendshipId}` ? t('common.loading') : t('friends.block')}
               </button>
             </div>
           ))

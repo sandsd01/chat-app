@@ -32,7 +32,7 @@ export function ForgotPasswordPage() {
       <form className="card" onSubmit={handleSubmit}>
         <h1>{t('forgotPassword.title')}</h1>
         <p className="hint">{t('forgotPassword.description')}</p>
-        {error && <p className="error">{error}</p>}
+        {error && <p className="error" role="alert">{error}</p>}
         {message && <p className="notice">{message}</p>}
         <label>
           {t('login.email')}
