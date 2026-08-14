@@ -36,4 +36,4 @@ async function createUserWithUniquePublicId(prisma, data) {
   throw lastError;
 }
 
-module.exports = { generatePublicId, createUserWithUniquePublicId };
+module.exports = { createUserWithUniquePublicId };

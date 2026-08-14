@@ -69,8 +69,9 @@ export function ResetPasswordPage() {
                 required
               />
             </label>
+            <p className="friends-caption">{t('common.passwordHint')}</p>
             <button type="submit" disabled={loading}>
-              {loading ? '…' : t('resetPassword.submit')}
+              {loading ? t('common.loading') : t('resetPassword.submit')}
             </button>
           </>
         )}

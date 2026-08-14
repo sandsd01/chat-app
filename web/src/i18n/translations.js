@@ -12,6 +12,7 @@ export const translations = {
     'common.retry': 'Retry',
     'common.or': 'or',
     'common.appName': 'Chat',
+    'common.passwordHint': 'At least 8 characters',
 
     'login.title': 'Sign in',
     'login.email': 'Email',
@@ -176,6 +177,7 @@ export const translations = {
     'common.retry': 'ลองใหม่',
     'common.or': 'หรือ',
     'common.appName': 'Chat',
+    'common.passwordHint': 'อย่างน้อย 8 ตัวอักษร',
 
     'login.title': 'เข้าสู่ระบบ',
     'login.email': 'อีเมล',

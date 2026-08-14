@@ -15,7 +15,11 @@
   --bg-subtle: #f1eee7;
   --bg-raised: #fff;
   --border: #dedad1;
-  --border-strong: #b6afa0;
+  /* Darkened from an earlier #b6afa0 (~2.1:1) — WCAG 1.4.11 requires 3:1 for
+     UI-component boundaries (input/button/select borders use this, not just
+     decorative dividers), and this is the value every focusable control's
+     visible edge depends on. ~3.4:1 here, same hue family as --border. */
+  --border-strong: #8f8676;
   --accent: #22315c;
   --accent-hover: #33447a;
   --accent-soft: #e7eaf3;
@@ -68,7 +72,10 @@
     --bg-subtle: #1c1e29;
     --bg-raised: #20222c;
     --border: #34363f;
-    --border-strong: #4a4c58;
+    /* Lightened from an earlier #4a4c58 (~2.0:1) for the same WCAG 1.4.11
+       reason as the light-mode value above — ~3.3:1 here, same cool-gray
+       hue family as --border. */
+    --border-strong: #6a6c78;
     --accent: #8fa3e8;
     --accent-hover: #a9baf0;
     --accent-soft: #26304a;
@@ -347,15 +354,13 @@ button:disabled {
    enough contrast and size to be scanned quickly rather than read carefully. */
 
 /* Secondary actions read as secondary instead of competing with the primary one. */
-.btn-secondary,
-button.secondary {
+.btn-secondary {
   background: var(--bg);
   color: var(--accent);
   border: 1px solid var(--border-strong);
 }
 
-.btn-secondary:hover:not(:disabled),
-button.secondary:hover:not(:disabled) {
+.btn-secondary:hover:not(:disabled) {
   background: var(--accent-soft);
   border-color: var(--accent);
   color: var(--accent);
@@ -403,39 +408,6 @@ label {
   font-weight: 550;
   gap: 6px;
   margin-bottom: 4px;
-}
-
-/* Tables are scanned, not read: roomier rows, a header that reads as a header,
-   and a hover cue so the eye can track across a wide row. */
-table {
-  width: 100%;
-  border-collapse: collapse;
-}
-
-th {
-  font-size: 13px;
-  text-transform: uppercase;
-  letter-spacing: 0.06em;
-  color: var(--text-muted);
-  font-weight: 700;
-  border-bottom: 2px solid var(--border-strong);
-  padding: 12px 10px;
-  text-align: left;
-}
-
-td {
-  padding: 14px 10px;
-  border-bottom: 1px solid var(--border);
-  vertical-align: middle;
-}
-
-tbody tr:hover {
-  background: var(--bg-subtle);
-}
-
-/* Money/counters (if any future screen needs them) line up in columns. */
-td:has(+ td) {
-  font-variant-numeric: tabular-nums;
 }
 
 /* Nav: show where you are, and give links a real hit area. Scrolls sideways
@@ -798,13 +770,6 @@ td:has(+ td) {
 .chat-conversation-preview.unread {
   color: var(--text);
   font-weight: 600;
-}
-
-.chat-user-result-sub {
-  flex-shrink: 0;
-  font-size: 13px;
-  font-weight: 600;
-  color: var(--accent);
 }
 
 .chat-conversation-meta {
@@ -1295,6 +1260,15 @@ td:has(+ td) {
   border: 1px solid var(--border);
   border-radius: var(--radius);
   box-shadow: var(--shadow-md);
+}
+
+/* The reaction trigger on "mine" messages sits near the right edge of the
+   thread column — anchoring the 220px-wide grid to its left edge (the
+   default above) pushes most of it off-screen on a narrow viewport. Grow
+   from the right edge of the trigger instead, so it stays on-screen. */
+.chat-bubble-row.mine .chat-bubble-reaction-trigger-wrap .emoji-picker {
+  left: auto;
+  right: 0;
 }
 
 .emoji-picker-item {

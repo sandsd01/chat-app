@@ -39,7 +39,7 @@ export function ForgotPasswordPage() {
           <input type="email" value={email} onChange={(e) => setEmail(e.target.value)} required />
         </label>
         <button type="submit" disabled={loading}>
-          {loading ? '…' : t('forgotPassword.submit')}
+          {loading ? t('common.loading') : t('forgotPassword.submit')}
         </button>
         <Link to="/login">{t('login.backToLogin')}</Link>
       </form>

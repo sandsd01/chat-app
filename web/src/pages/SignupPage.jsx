@@ -69,6 +69,7 @@ export function SignupPage() {
             required
           />
         </label>
+        <p className="friends-caption">{t('common.passwordHint')}</p>
         {captchaRequired && (
           <Turnstile siteKey={captchaConfig.siteKey} onToken={setCaptchaToken} />
         )}

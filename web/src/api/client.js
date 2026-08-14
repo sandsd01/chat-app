@@ -24,11 +24,19 @@ export async function apiFetch(path, { method = 'GET', body, token } = {}) {
   const headers = { 'Content-Type': 'application/json' }
   if (token) headers.Authorization = `Bearer ${token}`
 
-  const res = await fetch(`${BASE_URL}${path}`, {
-    method,
-    headers,
-    body: body !== undefined ? JSON.stringify(body) : undefined,
-  })
+  let res
+  try {
+    res = await fetch(`${BASE_URL}${path}`, {
+      method,
+      headers,
+      body: body !== undefined ? JSON.stringify(body) : undefined,
+    })
+  } catch {
+    // fetch() itself throws (offline, DNS failure, CORS) rather than
+    // resolving with a bad status — status 0 distinguishes this from any
+    // real HTTP response for a caller that wants to branch on it.
+    throw new ApiError('Network error — check your connection and try again.', 0)
+  }
 
   notifyIfUnauthorized(res.status, Boolean(token))
 
@@ -37,7 +45,11 @@ export async function apiFetch(path, { method = 'GET', body, token } = {}) {
   const data = await res.json().catch(() => null)
 
   if (!res.ok) {
-    throw new ApiError(data?.error || `Request failed with status ${res.status}`, res.status)
+    // The server's own `error` string is preferred when present; this
+    // fallback only fires for a response with no parseable JSON body (a
+    // proxy timeout, a raw 500 page) — surface something actionable rather
+    // than the raw HTTP status code.
+    throw new ApiError(data?.error || 'Something went wrong. Please try again.', res.status)
   }
 
   return data

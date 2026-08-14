@@ -224,8 +224,9 @@ export function AccountPage() {
             required
           />
         </label>
+        <p className="friends-caption">{t('common.passwordHint')}</p>
         <button type="submit" disabled={loading}>
-          {loading ? '…' : t(user?.hasPassword ? 'account.updatePassword' : 'account.setPassword')}
+          {loading ? t('common.loading') : t(user?.hasPassword ? 'account.updatePassword' : 'account.setPassword')}
         </button>
       </form>
     </div>

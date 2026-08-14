@@ -19,18 +19,11 @@ import {
 } from '../api/chat'
 import { useDriveBackup } from '../hooks/useDriveBackup'
 import { EmojiPicker } from '../components/EmojiPicker'
+import { initials } from '../lib/format'
 
 const MESSAGE_PAGE_SIZE = 50
 const SCROLL_BOTTOM_THRESHOLD = 80
 const SCROLL_TOP_LOAD_THRESHOLD = 60
-
-function initials(nameOrEmail) {
-  const source = (nameOrEmail || '').trim()
-  if (!source) return '?'
-  const parts = source.split(/\s+/).filter(Boolean)
-  if (parts.length >= 2) return (parts[0][0] + parts[1][0]).toUpperCase()
-  return source.slice(0, 2).toUpperCase()
-}
 
 function isSameDay(a, b) {
   return a.toDateString() === b.toDateString()

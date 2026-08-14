@@ -24,7 +24,13 @@ export function TicketId({ id, copyLabel, copiedLabel, copyable = true }) {
         <span className="ticket-id-code">{id}</span>
       </div>
       {copyable && (
-        <button type="button" className="btn-secondary" onClick={handleCopy}>
+        <button
+          type="button"
+          className="btn-secondary"
+          onClick={handleCopy}
+          aria-live="polite"
+          aria-atomic="true"
+        >
           {copied ? copiedLabel : copyLabel}
         </button>
       )}
