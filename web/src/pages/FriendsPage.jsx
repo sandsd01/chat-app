@@ -90,7 +90,7 @@ export function FriendsPage() {
     <div>
       <h1>{t('friends.title')}</h1>
 
-      <div className="card card-wide friends-own-id">
+      <div className="card card-wide">
         <span className="friends-caption">{t('friends.yourId')}</span>
         <TicketId id={user.publicId} copyLabel={t('friends.copy')} copiedLabel={t('friends.copied')} />
         <p className="friends-caption">{t('friends.shareHint')}</p>
@@ -197,9 +197,9 @@ export function FriendsPage() {
         <h2>{t('friends.listTitle')}</h2>
         {error && <p className="error" role="alert">{t('friends.loadError')}</p>}
         {loading && friends.length === 0 ? (
-          <p className="hint">{t('common.loading')}</p>
+          <p className="loading-note">{t('common.loading')}</p>
         ) : friends.length === 0 ? (
-          <p className="hint">{t('friends.noFriends')}</p>
+          <p className="empty-state">{t('friends.noFriends')}</p>
         ) : (
           friends.map((f) => (
             <div className="friend-row" key={f.friendshipId}>

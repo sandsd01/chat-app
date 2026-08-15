@@ -608,10 +608,10 @@ export function ChatPage() {
             )}
 
             {conversationsLoading && conversations.length === 0 ? (
-              <p className="hint">{t('common.loading')}</p>
+              <p className="loading-note">{t('common.loading')}</p>
             ) : filteredConversations.length === 0 ? (
               trimmedQuery ? (
-                showNoMatches && <p className="hint">{t('chat.noResults')}</p>
+                showNoMatches && <p className="empty-state">{t('chat.noResults')}</p>
               ) : (
                 <div className="chat-empty">
                   <strong>{t('chat.noConversationsTitle')}</strong>
@@ -716,12 +716,12 @@ export function ChatPage() {
               </div>
               <div className="chat-messages" ref={messagesElRef} onScroll={handleScroll}>
                 {searchOpen && searchQuery.trim() ? (
-                  <div className="chat-search-results">
+                  <div>
                     {searchError && <p className="error" role="alert">{searchError}</p>}
                     {searchLoading ? (
-                      <p className="hint">{t('common.loading')}</p>
+                      <p className="loading-note">{t('common.loading')}</p>
                     ) : searchResults && searchResults.length === 0 ? (
-                      <p className="hint">{t('chat.noResults')}</p>
+                      <p className="empty-state">{t('chat.noResults')}</p>
                     ) : (
                       searchResults?.map((m) => (
                         <div key={m.id} className="chat-search-result-row">
@@ -746,7 +746,7 @@ export function ChatPage() {
                   </button>
                 )}
                 {messagesLoading ? (
-                  <p className="hint">{t('chat.loadingMessages')}</p>
+                  <p className="loading-note">{t('chat.loadingMessages')}</p>
                 ) : (
                   messages.map((m) => {
                     const dayKey = new Date(m.createdAt).toDateString()
@@ -764,7 +764,7 @@ export function ChatPage() {
                           <div className="chat-bubble-wrap">
                             {m.deletedAt ? (
                               <div className="chat-bubble deleted">
-                                <span className="chat-bubble-deleted-text">{t('chat.messageDeleted')}</span>
+                                <span>{t('chat.messageDeleted')}</span>
                               </div>
                             ) : editingMessageId === m.id ? (
                               <div className="chat-bubble-edit">
