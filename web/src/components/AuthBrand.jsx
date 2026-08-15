@@ -12,7 +12,20 @@ export function AuthBrand({ compact = false }) {
   const { t } = useLanguage()
   return (
     <div className={`auth-brand${compact ? ' compact' : ''}`}>
-      <span className="auth-brand-mark" aria-hidden="true">C</span>
+      <span className="auth-brand-mark" aria-hidden="true">
+        {/* The claim-ticket mark, identical in shape to public/favicon.svg and
+            the PWA icons. currentColor rather than a literal, so it inherits
+            --accent-contrast from .auth-brand-mark and stays legible when
+            dark mode flips that value. One evenodd path: the tear-off line is
+            a hole, not a second fill. */}
+        <svg viewBox="0 0 64 64" width="100%" height="100%" focusable="false">
+          <path
+            fill="currentColor"
+            fillRule="evenodd"
+            d="M9 20 L55 20 A3 3 0 0 1 58 23 L58 28 A4 4 0 0 0 58 36 L58 41 A3 3 0 0 1 55 44 L9 44 A3 3 0 0 1 6 41 L6 36 A4 4 0 0 0 6 28 L6 23 A3 3 0 0 1 9 20 Z M45 24 L47 24 L47 40 L45 40 Z"
+          />
+        </svg>
+      </span>
       {t('common.appName')}
     </div>
   )

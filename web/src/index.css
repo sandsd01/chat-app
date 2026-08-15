@@ -197,18 +197,21 @@ a {
   color: var(--text);
 }
 
+/* Holds the claim-ticket glyph from AuthBrand.jsx. The glyph inherits
+   `color` rather than carrying its own fill, which is why --accent-contrast
+   is set here — it flips with the theme so the mark never goes white-on-pale
+   in dark mode. (The font declarations this rule used to carry went with the
+   letter "C" the glyph replaced.) */
 .auth-brand-mark {
   display: inline-flex;
   align-items: center;
   justify-content: center;
+  flex-shrink: 0;
   width: 32px;
   height: 32px;
   border-radius: var(--radius-sm);
   background: var(--accent);
   color: var(--accent-contrast);
-  font-family: var(--font-mono);
-  font-weight: 500;
-  font-size: 16px;
 }
 
 /* Layout.jsx's navbar — smaller, inline with nav links, no page-hero
@@ -222,7 +225,6 @@ a {
 .auth-brand.compact .auth-brand-mark {
   width: 26px;
   height: 26px;
-  font-size: 13px;
 }
 
 /* A labeled rule between the primary sign-in action and "Continue with
