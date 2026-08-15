@@ -19,7 +19,7 @@ import {
 } from '../api/chat'
 import { useDriveBackup } from '../hooks/useDriveBackup'
 import { EmojiPicker } from '../components/EmojiPicker'
-import { initials, localeFor } from '../lib/format'
+import { initials, localeFor, CLEARED_ATTACHMENT_FIELDS } from '../lib/format'
 
 const MESSAGE_PAGE_SIZE = 50
 const SCROLL_BOTTOM_THRESHOLD = 80
@@ -314,11 +314,7 @@ export function ChatPage() {
             ? {
                 ...m,
                 deletedAt: payload.deletedAt,
-                body: null,
-                attachmentType: null,
-                attachmentUrl: null,
-                attachmentKey: null,
-                attachmentName: null,
+                ...CLEARED_ATTACHMENT_FIELDS,
               }
             : m
         )
@@ -410,11 +406,7 @@ export function ChatPage() {
             ? {
                 ...m,
                 ...updated,
-                body: null,
-                attachmentType: null,
-                attachmentUrl: null,
-                attachmentKey: null,
-                attachmentName: null,
+                ...CLEARED_ATTACHMENT_FIELDS,
               }
             : m
         )

@@ -1,4 +1,3 @@
-const crypto = require("crypto");
 const express = require("express");
 const prisma = require("../../prisma/client");
 const { authenticate } = require("../middleware/auth");
@@ -9,6 +8,7 @@ const {
   DRIVE_SCOPE,
   archiveUserConversations,
 } = require("../lib/drive");
+const { createTicketStore } = require("../lib/ticketStore");
 
 const router = express.Router();
 
@@ -27,7 +27,7 @@ function appUrl() {
 // the only thing standing between an attacker and account takeover.
 const DRIVE_STATE_COOKIE = "g_drive_state";
 const DRIVE_STATE_TTL_MS = 5 * 60 * 1000;
-const driveConnectStates = new Map(); // state -> { userId, expiresAt }
+const driveConnectStates = createTicketStore(DRIVE_STATE_TTL_MS); // state -> userId
 
 router.get("/status", authenticate, async (req, res) => {
   const user = await prisma.user.findUnique({ where: { id: req.user.id } });
@@ -39,11 +39,7 @@ router.post("/connect/start", authenticate, (req, res) => {
     return res.status(503).json({ error: "Google Drive backup is not configured" });
   }
 
-  const state = crypto.randomBytes(16).toString("hex");
-  const expiresAt = Date.now() + DRIVE_STATE_TTL_MS;
-  driveConnectStates.set(state, { userId: req.user.id, expiresAt });
-  const timer = setTimeout(() => driveConnectStates.delete(state), DRIVE_STATE_TTL_MS);
-  timer.unref?.();
+  const state = driveConnectStates.issue(req.user.id);
 
   res.cookie(DRIVE_STATE_COOKIE, state, {
     httpOnly: true,
@@ -77,10 +73,9 @@ router.get("/connect/callback", async (req, res) => {
   const cookieState = req.cookies?.[DRIVE_STATE_COOKIE];
   res.clearCookie(DRIVE_STATE_COOKIE);
 
-  const entry = state ? driveConnectStates.get(state) : null;
-  if (entry) driveConnectStates.delete(state);
+  const stateUserId = state ? driveConnectStates.consume(state) : null;
 
-  if (!code || !state || !cookieState || state !== cookieState || !entry || entry.expiresAt < Date.now()) {
+  if (!code || !state || !cookieState || state !== cookieState || !stateUserId) {
     return failure("invalid_state");
   }
 
@@ -93,7 +88,7 @@ router.get("/connect/callback", async (req, res) => {
       return failure("no_refresh_token");
     }
     await prisma.user.update({
-      where: { id: entry.userId },
+      where: { id: stateUserId },
       data: {
         driveRefreshTokenEnc: encryptSecret(tokens.refresh_token),
         driveConnectedAt: new Date(),

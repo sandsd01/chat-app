@@ -29,6 +29,15 @@ function publishFriendEvent(userId, type) {
   chatBus.publish(userId, "friend", { type });
 }
 
+// Shared by every route below that changes a friendship's state: look up the
+// acting user's display name, then fire both the push notification and the
+// live "friend" SSE event at the target.
+async function notifyTarget(meId, targetId, title, bodyFor, eventType) {
+  const me = await prisma.user.findUnique({ where: { id: meId }, select: { name: true, email: true } });
+  notify(targetId, title, bodyFor(me.name || me.email));
+  publishFriendEvent(targetId, eventType);
+}
+
 const PUBLIC_USER_SELECT = { id: true, publicId: true, name: true, email: true };
 
 function pair(a, b) {
@@ -136,9 +145,7 @@ router.post("/requests", requireVerifiedEmail, async (req, res) => {
     const created = await prisma.friendship.create({
       data: { userAId, userBId, status: "pending", requestedById: meId },
     });
-    const me = await prisma.user.findUnique({ where: { id: meId }, select: { name: true, email: true } });
-    notify(target.id, "New friend request", me.name || me.email);
-    publishFriendEvent(target.id, "request_received");
+    await notifyTarget(meId, target.id, "New friend request", (name) => name, "request_received");
     return res.status(201).json({ requestId: created.id, status: "pending" });
   }
 
@@ -159,9 +166,13 @@ router.post("/requests", requireVerifiedEmail, async (req, res) => {
     where: { id: existing.id },
     data: { status: "accepted", respondedAt: new Date() },
   });
-  const me = await prisma.user.findUnique({ where: { id: meId }, select: { name: true, email: true } });
-  notify(target.id, "Friend request accepted", `${me.name || me.email} accepted your request`);
-  publishFriendEvent(target.id, "request_accepted");
+  await notifyTarget(
+    meId,
+    target.id,
+    "Friend request accepted",
+    (name) => `${name} accepted your request`,
+    "request_accepted"
+  );
   res.status(200).json({ requestId: accepted.id, status: "accepted" });
 });
 
@@ -193,9 +204,13 @@ router.post("/requests/:id/accept", async (req, res) => {
     if (err.code === "P2025") return res.status(409).json({ error: "This request was already handled" });
     throw err;
   }
-  const me = await prisma.user.findUnique({ where: { id: req.user.id }, select: { name: true, email: true } });
-  notify(row.requestedById, "Friend request accepted", `${me.name || me.email} accepted your request`);
-  publishFriendEvent(row.requestedById, "request_accepted");
+  await notifyTarget(
+    req.user.id,
+    row.requestedById,
+    "Friend request accepted",
+    (name) => `${name} accepted your request`,
+    "request_accepted"
+  );
   res.json({ status: "accepted" });
 });
 

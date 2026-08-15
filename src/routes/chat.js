@@ -1,4 +1,3 @@
-const crypto = require("crypto");
 const express = require("express");
 const prisma = require("../../prisma/client");
 const { authenticate } = require("../middleware/auth");
@@ -7,6 +6,7 @@ const { areFriends } = require("./friends");
 const { sendPushToUser } = require("../lib/push");
 const { readArchivedMessages } = require("../lib/drive");
 const { attachmentsConfigured, createUploadUrl, verifyUploadedObject, createDownloadUrl } = require("../lib/attachments");
+const { createTicketStore } = require("../lib/ticketStore");
 
 const router = express.Router();
 
@@ -20,32 +20,14 @@ const PUBLIC_USER_SELECT = { id: true, name: true, email: true };
 // this process's memory (fine for a single-container deploy, same caveat as
 // chatBus) and are deleted the moment they're consumed or expire.
 const TICKET_TTL_MS = 30 * 1000;
-const tickets = new Map(); // ticket -> { userId, expiresAt }
-
-function issueTicket(userId) {
-  const ticket = crypto.randomBytes(24).toString("hex");
-  const expiresAt = Date.now() + TICKET_TTL_MS;
-  tickets.set(ticket, { userId, expiresAt });
-  const timer = setTimeout(() => tickets.delete(ticket), TICKET_TTL_MS);
-  timer.unref?.();
-  return ticket;
-}
-
-/** Single-use: returns the associated userId and removes the ticket, or null. */
-function consumeTicket(ticket) {
-  const entry = tickets.get(ticket);
-  if (!entry) return null;
-  tickets.delete(ticket);
-  if (entry.expiresAt < Date.now()) return null;
-  return entry.userId;
-}
+const tickets = createTicketStore(TICKET_TTL_MS);
 
 // Must be registered before router.use(authenticate) below so a request for
 // this exact path never hits the JWT check — it authenticates itself via the
 // ticket instead.
 router.get("/stream", (req, res) => {
   const ticket = typeof req.query.ticket === "string" ? req.query.ticket : "";
-  const userId = ticket ? consumeTicket(ticket) : null;
+  const userId = ticket ? tickets.consume(ticket) : null;
   if (!userId) {
     return res.status(401).json({ error: "Invalid or expired ticket" });
   }
@@ -130,6 +112,12 @@ async function getConversationForParticipant(conversationId, userId) {
 
 function otherParticipantId(conversation, meId) {
   return conversation.userAId === meId ? conversation.userBId : conversation.userAId;
+}
+
+/** Every conversation-scoped SSE event goes to both participants; this is that fan-out in one place. */
+function publishToBoth(conversation, event, payload) {
+  chatBus.publish(conversation.userAId, event, payload);
+  chatBus.publish(conversation.userBId, event, payload);
 }
 
 // Shared by every `before`-cursor route below. Returns null if `before` is
@@ -440,8 +428,7 @@ router.post("/conversations/:id/messages", async (req, res) => {
 
   // Deliberately not logged via src/lib/audit.js — message content doesn't
   // belong in an audit trail.
-  chatBus.publish(conversation.userAId, "message", ssePayload);
-  chatBus.publish(conversation.userBId, "message", ssePayload);
+  publishToBoth(conversation, "message", ssePayload);
 
   // Push is the fallback for "not connected," not a duplicate of the SSE
   // event — skip it entirely when the recipient already has a live stream
@@ -501,8 +488,7 @@ router.patch("/conversations/:id/messages/:messageId", async (req, res) => {
   });
 
   const payload = { id: updated.id, conversationId, body: updated.body, editedAt: updated.editedAt };
-  chatBus.publish(conversation.userAId, "message-edited", payload);
-  chatBus.publish(conversation.userBId, "message-edited", payload);
+  publishToBoth(conversation, "message-edited", payload);
 
   res.json(payload);
 });
@@ -533,8 +519,7 @@ router.delete("/conversations/:id/messages/:messageId", async (req, res) => {
   });
 
   const payload = { id: updated.id, conversationId, deletedAt: updated.deletedAt };
-  chatBus.publish(conversation.userAId, "message-deleted", payload);
-  chatBus.publish(conversation.userBId, "message-deleted", payload);
+  publishToBoth(conversation, "message-deleted", payload);
 
   res.json(payload);
 });
@@ -604,8 +589,7 @@ router.post("/conversations/:id/messages/:messageId/reactions", async (req, res)
 
   await prisma.messageReaction.create({ data: { messageId: message.id, userId: req.user.id, emoji } });
 
-  chatBus.publish(conversation.userAId, "reaction-added", payload);
-  chatBus.publish(conversation.userBId, "reaction-added", payload);
+  publishToBoth(conversation, "reaction-added", payload);
 
   res.status(201).json(payload);
 });
@@ -630,8 +614,7 @@ router.delete("/conversations/:id/messages/:messageId/reactions/:emoji", async (
   }
 
   const payload = { conversationId, messageId: message.id, emoji, userId: req.user.id };
-  chatBus.publish(conversation.userAId, "reaction-removed", payload);
-  chatBus.publish(conversation.userBId, "reaction-removed", payload);
+  publishToBoth(conversation, "reaction-removed", payload);
 
   res.json(payload);
 });
@@ -672,7 +655,7 @@ router.post("/conversations/:id/read", async (req, res) => {
 });
 
 router.post("/stream-ticket", (req, res) => {
-  const ticket = issueTicket(req.user.id);
+  const ticket = tickets.issue(req.user.id);
   res.json({ ticket });
 });
 
