@@ -2,9 +2,12 @@ import { useState } from 'react'
 import { Link, useSearchParams } from 'react-router-dom'
 import { apiFetch } from '../api/client'
 import { useLanguage } from '../context/LanguageContext'
+import { AuthBrand } from '../components/AuthBrand'
+import { useDocumentTitle } from '../hooks/useDocumentTitle'
 
 export function ResetPasswordPage() {
   const { t } = useLanguage()
+  useDocumentTitle(t('resetPassword.title'))
   const [searchParams] = useSearchParams()
   const email = searchParams.get('email')
   const token = searchParams.get('token')
@@ -35,13 +38,10 @@ export function ResetPasswordPage() {
   if (!email || !token) {
     return (
       <div className="centered">
-        <div className="auth-brand">
-          <span className="auth-brand-mark" aria-hidden="true">💬</span>
-          {t('common.appName')}
-        </div>
+        <AuthBrand />
         <div className="card">
           <h1>{t('resetPassword.title')}</h1>
-          <p className="error">{t('resetPassword.invalidLink')}</p>
+          <p className="error" role="alert">{t('resetPassword.invalidLink')}</p>
           <Link to="/forgot-password">{t('login.forgotPassword')}</Link>
         </div>
       </div>
@@ -50,13 +50,10 @@ export function ResetPasswordPage() {
 
   return (
     <div className="centered">
-      <div className="auth-brand">
-        <span className="auth-brand-mark" aria-hidden="true">💬</span>
-        {t('common.appName')}
-      </div>
+      <AuthBrand />
       <form className="card" onSubmit={handleSubmit}>
         <h1>{t('resetPassword.title')}</h1>
-        {error && <p className="error">{error}</p>}
+        {error && <p className="error" role="alert">{error}</p>}
         {message ? (
           <>
             <p className="notice">{message}</p>
@@ -74,8 +71,9 @@ export function ResetPasswordPage() {
                 required
               />
             </label>
+            <p className="friends-caption">{t('common.passwordHint')}</p>
             <button type="submit" disabled={loading}>
-              {loading ? '…' : t('resetPassword.submit')}
+              {loading ? t('common.loading') : t('resetPassword.submit')}
             </button>
           </>
         )}

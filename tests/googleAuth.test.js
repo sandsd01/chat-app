@@ -117,6 +117,7 @@ describe("Google OAuth", () => {
       const stored = await prisma.user.findUnique({ where: { email: "newgoogleuser@test.com" } });
       assert.equal(stored.googleId, "google-sub-new");
       assert.equal(stored.passwordHash, null);
+      assert.ok(stored.emailVerifiedAt, "Google already required email_verified, so this account starts verified");
     });
 
     test("auto-links to an existing password account with the same verified email", async (t) => {
@@ -134,6 +135,20 @@ describe("Google OAuth", () => {
       const stored = await prisma.user.findUnique({ where: { id: existing.id } });
       assert.equal(stored.googleId, "google-sub-link");
       assert.ok(stored.passwordHash, "the original password must survive linking");
+    });
+
+    test("auto-linking also verifies the email if the password account hadn't verified yet", async (t) => {
+      const existing = await createUser({ email: "unverified-link@test.com", password: "somepassword1", verified: false });
+      mockGoogleIdentity(t, { sub: "google-sub-link2", email: "unverified-link@test.com", email_verified: true });
+
+      const agent = request.agent(app);
+      const state = parseQuery((await agent.get("/api/auth/google")).headers.location).state;
+      const callback = await agent.get(`/api/auth/google/callback?code=abc&state=${state}`);
+      const ticket = parseQuery(callback.headers.location).ticket;
+      await request(app).post("/api/auth/google/exchange").send({ ticket });
+
+      const stored = await prisma.user.findUnique({ where: { id: existing.id } });
+      assert.ok(stored.emailVerifiedAt, "linking via Google is itself proof of a verified email");
     });
 
     test("a returning Google user (by googleId) logs into the same account", async (t) => {
@@ -191,7 +206,7 @@ describe("Google OAuth", () => {
       assert.match(res.body.error, /Google/);
     });
 
-    test("PATCH /auth/password on a Google-only account 400s instead of crashing", async (t) => {
+    test("PATCH /auth/password on a Google-only account sets a first password rather than erroring", async (t) => {
       mockGoogleIdentity(t, { sub: "google-sub-nopass2", email: "nopassword2@test.com", email_verified: true });
       const agent = request.agent(app);
       const state = parseQuery((await agent.get("/api/auth/google")).headers.location).state;
@@ -199,11 +214,18 @@ describe("Google OAuth", () => {
       const ticket = parseQuery(callback.headers.location).ticket;
       const { body } = await request(app).post("/api/auth/google/exchange").send({ ticket });
 
+      // No currentPassword needed — there is no existing password to prove
+      // knowledge of; the caller's JWT already proves it's their own account.
       const res = await request(app)
         .patch("/api/auth/password")
         .set("Authorization", `Bearer ${body.token}`)
-        .send({ currentPassword: "whatever", newPassword: "newpassword123" });
-      assert.equal(res.status, 400);
+        .send({ newPassword: "newpassword123" });
+      assert.equal(res.status, 200);
+
+      const login = await request(app)
+        .post("/api/auth/login")
+        .send({ email: "nopassword2@test.com", password: "newpassword123" });
+      assert.equal(login.status, 200);
     });
   });
 });

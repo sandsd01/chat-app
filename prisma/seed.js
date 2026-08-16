@@ -27,7 +27,14 @@ async function main() {
       console.log(`User ${email} already exists, skipping.`);
     } else {
       const passwordHash = await bcrypt.hash(password, 10);
-      user = await createUserWithUniquePublicId(prisma, { email, passwordHash, name });
+      // Seed accounts skip real email verification — there's no inbox to
+      // click a link in during local dev.
+      user = await createUserWithUniquePublicId(prisma, {
+        email,
+        passwordHash,
+        name,
+        emailVerifiedAt: new Date(),
+      });
       console.log(`Seeded user: ${email} (${user.publicId})`);
     }
     users.push(user);

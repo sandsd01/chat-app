@@ -6,6 +6,50 @@ const router = express.Router();
 
 router.use(authenticate);
 
+const PUBLIC_ID_PATTERN = /^[a-zA-Z0-9]{4,20}$/;
+
+// A user gets one shot at replacing their randomly generated publicId with a
+// chosen one (see the publicIdCustomized comment on the User model) — once
+// spent, this always 409s rather than letting them keep picking a new one.
+router.patch("/me", async (req, res) => {
+  const raw = req.body?.publicId;
+
+  // req.user is just the JWT payload (id/email/role) — publicIdCustomized
+  // lives in the database, not the token, so it has to be read fresh here.
+  const me = await prisma.user.findUnique({ where: { id: req.user.id } });
+  if (me.publicIdCustomized) {
+    return res.status(409).json({ error: "You've already set a custom ID" });
+  }
+  if (typeof raw !== "string" || !PUBLIC_ID_PATTERN.test(raw)) {
+    return res.status(400).json({ error: "publicId must be 4-20 letters or numbers" });
+  }
+  // Uppercased to match the alphabet randomly generated ids already use
+  // (src/lib/publicId.js) — GET /friends/lookup uppercases whatever it's
+  // given before querying, so a stored lowercase id would never match a
+  // lookup and 404 as "No account with that ID".
+  const publicId = raw.toUpperCase();
+
+  const existing = await prisma.user.findFirst({
+    where: { publicId: { equals: publicId, mode: "insensitive" } },
+  });
+  if (existing) {
+    return res.status(409).json({ error: "That ID is already taken" });
+  }
+
+  // updateMany (not update) so the WHERE clause re-checks publicIdCustomized
+  // at write time, not just in the read above — two concurrent requests that
+  // both passed the read-time check would otherwise both succeed, spending
+  // the "one custom ID" allowance twice (last write wins).
+  const { count } = await prisma.user.updateMany({
+    where: { id: req.user.id, publicIdCustomized: false },
+    data: { publicId, publicIdCustomized: true },
+  });
+  if (count === 0) {
+    return res.status(409).json({ error: "You've already set a custom ID" });
+  }
+  res.json({ publicId });
+});
+
 // There is no admin role in this app (phase 1 is email+password only, one
 // flat kind of account), so the only user-management action is deleting
 // your own account — never someone else's.
@@ -26,8 +70,35 @@ router.delete("/me", async (req, res) => {
   if (hasMessages) {
     return res.status(409).json({ error: "Cannot delete an account with sent messages" });
   }
+  // Friendship rows are the other place account deletion would otherwise
+  // orphan someone else's data (their side of the relationship/request) —
+  // same "refuse rather than orphan" reasoning as conversations/messages
+  // above. Reachable independently of those two checks: two accounts can be
+  // friends (or have a pending request) without ever having opened a chat.
+  const hasFriendships = await prisma.friendship.findFirst({
+    where: { OR: [{ userAId: id }, { userBId: id }] },
+  });
+  if (hasFriendships) {
+    return res.status(409).json({ error: "Cannot delete an account with friend connections or pending requests" });
+  }
 
-  await prisma.user.delete({ where: { id } });
+  try {
+    // Unlike conversations/friendships, a push subscription is this
+    // account's own device registration with no other party's data in it —
+    // safe to clear here rather than 409ing and making deletion depend on a
+    // "manage your push subscriptions" step that doesn't otherwise exist.
+    await prisma.pushSubscription.deleteMany({ where: { userId: id } });
+    await prisma.user.delete({ where: { id } });
+  } catch (err) {
+    // The checks above are read-then-act, not transactional — a message
+    // sent in the gap between them and this delete hits the FK constraint
+    // here instead. Translate that into the same clean 409 rather than
+    // letting it fall through to a raw 500.
+    if (err.code === "P2003") {
+      return res.status(409).json({ error: "Cannot delete an account with chat conversations" });
+    }
+    throw err;
+  }
   res.status(204).send();
 });
 

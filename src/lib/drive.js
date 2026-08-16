@@ -165,28 +165,57 @@ async function archiveUserConversations(userId) {
     // next time (see the per-user try/catch in runArchiveSweep), never
     // silently truncated.
     const existingContent = await downloadFileContent(accessToken, archiveFile.driveFileId);
-    const newLines = newMessages
-      .map((m) =>
-        JSON.stringify({
-          id: m.id,
-          senderId: m.senderId,
-          senderName: m.sender.name || m.sender.email,
-          body: m.body,
-          createdAt: m.createdAt,
+
+    // If a previous sweep uploaded these same messages to Drive but then
+    // crashed/failed before the lastArchivedMessageId write below, the
+    // watermark would still point at the old value and this query would
+    // re-fetch messages already sitting in the file. Filtering by id here
+    // (rather than trusting the watermark alone) makes a retry idempotent:
+    // already-present lines never get appended twice.
+    const alreadyArchivedIds = new Set(
+      existingContent
+        .split("\n")
+        .filter(Boolean)
+        .map((line) => {
+          try {
+            return JSON.parse(line).id;
+          } catch {
+            return null;
+          }
         })
-      )
-      .join("\n");
-    const separator = existingContent && !existingContent.endsWith("\n") ? "\n" : "";
-    await uploadFileContent(accessToken, archiveFile.driveFileId, existingContent + separator + newLines + "\n");
+        .filter(Boolean)
+    );
+    const messagesToAppend = newMessages.filter((m) => !alreadyArchivedIds.has(m.id));
+
+    if (messagesToAppend.length > 0) {
+      const newLines = messagesToAppend
+        .map((m) =>
+          JSON.stringify({
+            id: m.id,
+            senderId: m.senderId,
+            senderName: m.sender.name || m.sender.email,
+            body: m.body,
+            // Attachment bytes are never backed up here — out of scope for
+            // now (see the design spec). Recording that one existed at
+            // least keeps the archived history from looking like a message
+            // silently vanished.
+            hasAttachment: Boolean(m.attachmentKey),
+            attachmentName: m.attachmentName || null,
+            createdAt: m.createdAt,
+          })
+        )
+        .join("\n");
+      const separator = existingContent && !existingContent.endsWith("\n") ? "\n" : "";
+      await uploadFileContent(accessToken, archiveFile.driveFileId, existingContent + separator + newLines + "\n");
+      messagesArchived += messagesToAppend.length;
+      filesUpdated += 1;
+    }
 
     const lastArchivedMessageId = newMessages[newMessages.length - 1].id;
     await prisma.driveArchiveFile.update({
       where: { id: archiveFile.id },
       data: { lastArchivedMessageId },
     });
-
-    messagesArchived += newMessages.length;
-    filesUpdated += 1;
   }
 
   return { messagesArchived, filesUpdated };
@@ -266,7 +295,15 @@ async function readArchivedMessages(userId, conversationId, { before, limit = 50
   const page = eligible
     .slice(Math.max(0, eligible.length - limit))
     .reverse()
-    .map((m) => ({ id: m.id, conversationId, senderId: m.senderId, body: m.body, createdAt: m.createdAt }));
+    .map((m) => ({
+      id: m.id,
+      conversationId,
+      senderId: m.senderId,
+      body: m.body,
+      hasAttachment: m.hasAttachment || false,
+      attachmentName: m.attachmentName || null,
+      createdAt: m.createdAt,
+    }));
 
   return { data: page, hasMore, nextBefore: hasMore ? page[page.length - 1].id : null };
 }

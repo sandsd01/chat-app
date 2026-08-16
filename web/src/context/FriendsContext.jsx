@@ -15,6 +15,20 @@ import {
 
 const FriendsContext = createContext(null)
 
+// Every action below is the same shape — call the API, then refetch so
+// friends/incoming/outgoing reflect the mutation — differing only in which
+// API function and argument they use.
+function useMutateAndRefresh(apiFn, token, refresh) {
+  return useCallback(
+    async (arg) => {
+      const result = await apiFn(arg, token)
+      await refresh()
+      return result
+    },
+    [apiFn, token, refresh]
+  )
+}
+
 export function FriendsProvider({ children }) {
   const { token } = useAuth()
   const { subscribeToFriendEvents } = useChat()
@@ -81,62 +95,13 @@ export function FriendsProvider({ children }) {
     })
   }, [token, subscribeToFriendEvents, refresh])
 
-  const sendRequest = useCallback(
-    async (publicId) => {
-      const result = await sendFriendRequest(publicId, token)
-      await refresh()
-      return result
-    },
-    [token, refresh]
-  )
-
-  const acceptRequest = useCallback(
-    async (requestId) => {
-      await acceptFriendRequest(requestId, token)
-      await refresh()
-    },
-    [token, refresh]
-  )
-
-  const declineRequest = useCallback(
-    async (requestId) => {
-      await declineFriendRequest(requestId, token)
-      await refresh()
-    },
-    [token, refresh]
-  )
-
-  const cancelRequest = useCallback(
-    async (requestId) => {
-      await cancelFriendRequest(requestId, token)
-      await refresh()
-    },
-    [token, refresh]
-  )
-
-  const removeFriend = useCallback(
-    async (userId) => {
-      await removeFriendApi(userId, token)
-      await refresh()
-    },
-    [token, refresh]
-  )
-
-  const blockUser = useCallback(
-    async (userId) => {
-      await blockUserApi(userId, token)
-      await refresh()
-    },
-    [token, refresh]
-  )
-
-  const unblockUser = useCallback(
-    async (userId) => {
-      await unblockUserApi(userId, token)
-      await refresh()
-    },
-    [token, refresh]
-  )
+  const sendRequest = useMutateAndRefresh(sendFriendRequest, token, refresh)
+  const acceptRequest = useMutateAndRefresh(acceptFriendRequest, token, refresh)
+  const declineRequest = useMutateAndRefresh(declineFriendRequest, token, refresh)
+  const cancelRequest = useMutateAndRefresh(cancelFriendRequest, token, refresh)
+  const removeFriend = useMutateAndRefresh(removeFriendApi, token, refresh)
+  const blockUser = useMutateAndRefresh(blockUserApi, token, refresh)
+  const unblockUser = useMutateAndRefresh(unblockUserApi, token, refresh)
 
   const value = useMemo(
     () => ({

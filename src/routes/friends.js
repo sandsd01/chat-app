@@ -1,6 +1,6 @@
 const express = require("express");
 const prisma = require("../../prisma/client");
-const { authenticate } = require("../middleware/auth");
+const { authenticate, requireVerifiedEmail } = require("../middleware/auth");
 const { sendPushToUser } = require("../lib/push");
 const chatBus = require("../lib/chatBus");
 
@@ -29,6 +29,15 @@ function publishFriendEvent(userId, type) {
   chatBus.publish(userId, "friend", { type });
 }
 
+// Shared by every route below that changes a friendship's state: look up the
+// acting user's display name, then fire both the push notification and the
+// live "friend" SSE event at the target.
+async function notifyTarget(meId, targetId, title, bodyFor, eventType) {
+  const me = await prisma.user.findUnique({ where: { id: meId }, select: { name: true, email: true } });
+  notify(targetId, title, bodyFor(me.name || me.email));
+  publishFriendEvent(targetId, eventType);
+}
+
 const PUBLIC_USER_SELECT = { id: true, publicId: true, name: true, email: true };
 
 function pair(a, b) {
@@ -37,6 +46,18 @@ function pair(a, b) {
 
 function otherUserOf(friendship, meId) {
   return friendship.userAId === meId ? friendship.userB : friendship.userA;
+}
+
+// Shared by every route below keyed on a :userId param. Sends the 400 itself
+// (rather than returning an error object) so each call site stays a
+// one-line early return.
+function parseTargetUserId(req, res) {
+  const targetId = Number(req.params.userId);
+  if (!Number.isInteger(targetId)) {
+    res.status(400).json({ error: "Invalid user id" });
+    return null;
+  }
+  return targetId;
 }
 
 /** Exported for chat.js — true only for an `accepted` row between the two ids. */
@@ -104,7 +125,11 @@ router.get("/requests", async (req, res) => {
   res.json({ incoming, outgoing });
 });
 
-router.post("/requests", async (req, res) => {
+// The one route in this file gated on a verified email: sending an
+// unsolicited request to a stranger's public ID is the actual bot-abuse
+// vector, not accepting/declining/cancelling one you're already party to, or
+// anything on the existing-friends list below.
+router.post("/requests", requireVerifiedEmail, async (req, res) => {
   const meId = req.user.id;
   const publicId = typeof req.body?.publicId === "string" ? req.body.publicId.trim().toUpperCase() : "";
   if (!publicId) return res.status(400).json({ error: "publicId is required" });
@@ -120,9 +145,7 @@ router.post("/requests", async (req, res) => {
     const created = await prisma.friendship.create({
       data: { userAId, userBId, status: "pending", requestedById: meId },
     });
-    const me = await prisma.user.findUnique({ where: { id: meId }, select: { name: true, email: true } });
-    notify(target.id, "New friend request", me.name || me.email);
-    publishFriendEvent(target.id, "request_received");
+    await notifyTarget(meId, target.id, "New friend request", (name) => name, "request_received");
     return res.status(201).json({ requestId: created.id, status: "pending" });
   }
 
@@ -143,9 +166,13 @@ router.post("/requests", async (req, res) => {
     where: { id: existing.id },
     data: { status: "accepted", respondedAt: new Date() },
   });
-  const me = await prisma.user.findUnique({ where: { id: meId }, select: { name: true, email: true } });
-  notify(target.id, "Friend request accepted", `${me.name || me.email} accepted your request`);
-  publishFriendEvent(target.id, "request_accepted");
+  await notifyTarget(
+    meId,
+    target.id,
+    "Friend request accepted",
+    (name) => `${name} accepted your request`,
+    "request_accepted"
+  );
   res.status(200).json({ requestId: accepted.id, status: "accepted" });
 });
 
@@ -165,13 +192,25 @@ router.post("/requests/:id/accept", async (req, res) => {
     return res.status(400).json({ error: "You can't accept your own request" });
   }
 
-  await prisma.friendship.update({
-    where: { id: row.id },
-    data: { status: "accepted", respondedAt: new Date() },
-  });
-  const me = await prisma.user.findUnique({ where: { id: req.user.id }, select: { name: true, email: true } });
-  notify(row.requestedById, "Friend request accepted", `${me.name || me.email} accepted your request`);
-  publishFriendEvent(row.requestedById, "request_accepted");
+  try {
+    await prisma.friendship.update({
+      where: { id: row.id },
+      data: { status: "accepted", respondedAt: new Date() },
+    });
+  } catch (err) {
+    // loadOwnPendingRequest read the row, but a concurrent decline/cancel
+    // could delete it before this update runs — P2025 ("record not found")
+    // is that race, not a real server error.
+    if (err.code === "P2025") return res.status(409).json({ error: "This request was already handled" });
+    throw err;
+  }
+  await notifyTarget(
+    req.user.id,
+    row.requestedById,
+    "Friend request accepted",
+    (name) => `${name} accepted your request`,
+    "request_accepted"
+  );
   res.json({ status: "accepted" });
 });
 
@@ -184,7 +223,14 @@ router.post("/requests/:id/decline", async (req, res) => {
 
   // Deleted, not kept as a "declined" row, so the same two people can try
   // again later without a stale row blocking a fresh request.
-  await prisma.friendship.delete({ where: { id: row.id } });
+  try {
+    await prisma.friendship.delete({ where: { id: row.id } });
+  } catch (err) {
+    // Same read-then-act race as accept above: the row loadOwnPendingRequest
+    // found could already be gone by the time this delete runs.
+    if (err.code === "P2025") return res.status(409).json({ error: "This request was already handled" });
+    throw err;
+  }
   res.status(204).send();
 });
 
@@ -195,15 +241,20 @@ router.delete("/requests/:id", async (req, res) => {
     return res.status(400).json({ error: "Only the sender can cancel a request" });
   }
 
-  await prisma.friendship.delete({ where: { id: row.id } });
+  try {
+    await prisma.friendship.delete({ where: { id: row.id } });
+  } catch (err) {
+    if (err.code === "P2025") return res.status(409).json({ error: "This request was already handled" });
+    throw err;
+  }
   res.status(204).send();
 });
 
 // --- Existing friends ---------------------------------------------------------
 
 router.delete("/:userId", async (req, res) => {
-  const targetId = Number(req.params.userId);
-  if (!Number.isInteger(targetId)) return res.status(400).json({ error: "Invalid user id" });
+  const targetId = parseTargetUserId(req, res);
+  if (targetId === null) return;
 
   const { userAId, userBId } = pair(req.user.id, targetId);
   const row = await prisma.friendship.findUnique({ where: { userAId_userBId: { userAId, userBId } } });
@@ -216,8 +267,8 @@ router.delete("/:userId", async (req, res) => {
 });
 
 router.post("/:userId/block", async (req, res) => {
-  const targetId = Number(req.params.userId);
-  if (!Number.isInteger(targetId)) return res.status(400).json({ error: "Invalid user id" });
+  const targetId = parseTargetUserId(req, res);
+  if (targetId === null) return;
   if (targetId === req.user.id) return res.status(400).json({ error: "You can't block yourself" });
 
   const target = await prisma.user.findUnique({ where: { id: targetId } });
@@ -233,8 +284,8 @@ router.post("/:userId/block", async (req, res) => {
 });
 
 router.post("/:userId/unblock", async (req, res) => {
-  const targetId = Number(req.params.userId);
-  if (!Number.isInteger(targetId)) return res.status(400).json({ error: "Invalid user id" });
+  const targetId = parseTargetUserId(req, res);
+  if (targetId === null) return;
 
   const { userAId, userBId } = pair(req.user.id, targetId);
   const row = await prisma.friendship.findUnique({ where: { userAId_userBId: { userAId, userBId } } });

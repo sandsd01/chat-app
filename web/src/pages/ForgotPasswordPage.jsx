@@ -2,9 +2,12 @@ import { useState } from 'react'
 import { Link } from 'react-router-dom'
 import { apiFetch } from '../api/client'
 import { useLanguage } from '../context/LanguageContext'
+import { AuthBrand } from '../components/AuthBrand'
+import { useDocumentTitle } from '../hooks/useDocumentTitle'
 
 export function ForgotPasswordPage() {
   const { t } = useLanguage()
+  useDocumentTitle(t('forgotPassword.title'))
   const [email, setEmail] = useState('')
   const [message, setMessage] = useState(null)
   const [error, setError] = useState(null)
@@ -27,21 +30,18 @@ export function ForgotPasswordPage() {
 
   return (
     <div className="centered">
-      <div className="auth-brand">
-        <span className="auth-brand-mark" aria-hidden="true">💬</span>
-        {t('common.appName')}
-      </div>
+      <AuthBrand />
       <form className="card" onSubmit={handleSubmit}>
         <h1>{t('forgotPassword.title')}</h1>
         <p className="hint">{t('forgotPassword.description')}</p>
-        {error && <p className="error">{error}</p>}
+        {error && <p className="error" role="alert">{error}</p>}
         {message && <p className="notice">{message}</p>}
         <label>
           {t('login.email')}
           <input type="email" value={email} onChange={(e) => setEmail(e.target.value)} required />
         </label>
         <button type="submit" disabled={loading}>
-          {loading ? '…' : t('forgotPassword.submit')}
+          {loading ? t('common.loading') : t('forgotPassword.submit')}
         </button>
         <Link to="/login">{t('login.backToLogin')}</Link>
       </form>

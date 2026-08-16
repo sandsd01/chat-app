@@ -264,6 +264,38 @@ describe("Google Drive backup", () => {
       assert.ok(archiveRow);
       assert.ok(archiveRow.lastArchivedMessageId > 0);
     });
+
+    test("does not prune messages system-wide — that's the cron sweep's job, not a per-request one", async (t) => {
+      installFakeDrive(t);
+      await prisma.user.update({
+        where: { id: alice.id },
+        data: { driveRefreshTokenEnc: encryptSecret("alice-refresh-token"), driveConnectedAt: new Date() },
+      });
+      await prisma.user.update({
+        where: { id: bob.id },
+        data: { driveRefreshTokenEnc: encryptSecret("bob-refresh-token"), driveConnectedAt: new Date() },
+      });
+      const conversation = await makeConversation(alice, bob);
+      const message = await sendMessage(conversation, alice, "eligible for pruning once both sides archive");
+
+      // Both sides archive directly (not through the route under test), so
+      // this message is fully eligible for pruneArchivedMessages to delete.
+      await archiveUserConversations(alice.id);
+      await archiveUserConversations(bob.id);
+
+      await request(app).post("/api/drive/sync").set("Authorization", `Bearer ${aliceToken}`);
+      assert.ok(
+        await prisma.message.findUnique({ where: { id: message.id } }),
+        "POST /drive/sync must not trigger a full prune — only archiveUserConversations for the caller"
+      );
+
+      await pruneArchivedMessages();
+      assert.equal(
+        await prisma.message.findUnique({ where: { id: message.id } }),
+        null,
+        "the cron sweep's pruneArchivedMessages should still prune it once called"
+      );
+    });
   });
 
   describe("src/lib/drive.js#archiveUserConversations", () => {
@@ -307,6 +339,69 @@ describe("Google Drive backup", () => {
 
       const second = await archiveUserConversations(alice.id);
       assert.deepEqual(second, { messagesArchived: 0, filesUpdated: 0 });
+    });
+
+    test("a stale watermark (Drive upload succeeded but the DB write didn't) doesn't duplicate lines on retry", async (t) => {
+      const fakeDrive = installFakeDrive(t);
+      await prisma.user.update({
+        where: { id: alice.id },
+        data: { driveRefreshTokenEnc: encryptSecret("refresh-token"), driveConnectedAt: new Date() },
+      });
+      const conversation = await makeConversation(alice, bob);
+      await sendMessage(conversation, alice, "solo message");
+
+      const first = await archiveUserConversations(alice.id);
+      assert.equal(first.messagesArchived, 1);
+
+      // Simulate a crash between the Drive upload succeeding and the
+      // lastArchivedMessageId write committing: the file already has the
+      // line, but the watermark still says nothing has been archived.
+      await prisma.driveArchiveFile.updateMany({
+        where: { userId: alice.id, conversationId: conversation.id },
+        data: { lastArchivedMessageId: 0 },
+      });
+
+      const retry = await archiveUserConversations(alice.id);
+      // Nothing new got appended (it was already there) — the fix's whole
+      // point is that this retry is a no-op on the Drive side.
+      assert.deepEqual(retry, { messagesArchived: 0, filesUpdated: 0 });
+
+      const files = [...fakeDrive.values()].filter((f) => f.mimeType === "text/plain");
+      const lines = files[0].content.trim().split("\n").filter(Boolean);
+      assert.equal(lines.length, 1, "the message must appear exactly once, not duplicated");
+
+      const archiveFile = await prisma.driveArchiveFile.findUnique({
+        where: { userId_conversationId: { userId: alice.id, conversationId: conversation.id } },
+      });
+      assert.ok(archiveFile.lastArchivedMessageId > 0, "the watermark should have caught back up");
+    });
+
+    test("records hasAttachment/attachmentName for a message with an attachment", async (t) => {
+      const fakeDrive = installFakeDrive(t);
+      await prisma.user.update({
+        where: { id: alice.id },
+        data: { driveRefreshTokenEnc: encryptSecret("refresh-token"), driveConnectedAt: new Date() },
+      });
+      const conversation = await makeConversation(alice, bob);
+      await prisma.message.create({
+        data: {
+          conversationId: conversation.id,
+          senderId: alice.id,
+          body: null,
+          attachmentKey: "conversations/1/photo.jpg",
+          attachmentName: "photo.jpg",
+          attachmentMimeType: "image/jpeg",
+          attachmentSize: 1000,
+          attachmentType: "image",
+        },
+      });
+
+      await archiveUserConversations(alice.id);
+
+      const files = [...fakeDrive.values()].filter((f) => f.mimeType === "text/plain");
+      const lines = files[0].content.trim().split("\n").map((l) => JSON.parse(l));
+      assert.equal(lines[0].hasAttachment, true);
+      assert.equal(lines[0].attachmentName, "photo.jpg");
     });
   });
 
@@ -434,6 +529,34 @@ describe("Google Drive backup", () => {
         [sent[0].id]
       );
       assert.equal(thirdPage.nextBefore, null);
+    });
+
+    test("surfaces hasAttachment/attachmentName for an archived-then-pruned attachment message", async (t) => {
+      installFakeDrive(t);
+      await prisma.user.update({
+        where: { id: alice.id },
+        data: { driveRefreshTokenEnc: encryptSecret("refresh-token"), driveConnectedAt: new Date() },
+      });
+      const conversation = await makeConversation(alice, bob);
+      await prisma.message.create({
+        data: {
+          conversationId: conversation.id,
+          senderId: alice.id,
+          body: null,
+          attachmentKey: "conversations/1/photo.jpg",
+          attachmentName: "photo.jpg",
+          attachmentMimeType: "image/jpeg",
+          attachmentSize: 1000,
+          attachmentType: "image",
+        },
+      });
+
+      await archiveUserConversations(alice.id);
+      await prisma.message.deleteMany({ where: { conversationId: conversation.id } });
+
+      const result = await readArchivedMessages(alice.id, conversation.id);
+      assert.equal(result.data[0].hasAttachment, true);
+      assert.equal(result.data[0].attachmentName, "photo.jpg");
     });
   });
 

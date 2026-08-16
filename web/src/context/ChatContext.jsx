@@ -1,8 +1,43 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react'
 import { useAuth } from './AuthContext'
-import { listConversations, startConversation, markRead as markReadApi, getStreamTicket } from '../api/chat'
+import {
+  listConversations,
+  startConversation,
+  markRead as markReadApi,
+  muteConversation as muteConversationApi,
+  unmuteConversation as unmuteConversationApi,
+  getStreamTicket,
+} from '../api/chat'
 
 const ChatContext = createContext(null)
+
+// Shared by every per-conversation event map below (typing, message-edited,
+// message-deleted) — each is otherwise an identical "Map<conversationId,
+// Set<callback>>" registry, just fed by a different SSE event name.
+function subscribeViaMap(map, key, callback) {
+  if (!map.has(key)) map.set(key, new Set())
+  map.get(key).add(callback)
+  return () => {
+    map.get(key)?.delete(callback)
+  }
+}
+
+function dispatchViaMap(map, key, payload) {
+  map.get(key)?.forEach((cb) => cb(payload))
+}
+
+// Every SSE listener below parses the event's JSON payload and swallows a
+// parse failure identically — only what each does with the parsed payload
+// differs, so that part is factored out here.
+function addJsonListener(es, event, handler) {
+  es.addEventListener(event, (evt) => {
+    try {
+      handler(JSON.parse(evt.data))
+    } catch {
+      // ignore malformed payloads
+    }
+  })
+}
 
 // Reconnect backoff: 1s, 2s, 4s, 8s, 16s, capped at 30s. After a handful of
 // failed attempts we report `down` instead of `reconnecting` so the banner
@@ -25,6 +60,11 @@ export function ChatProvider({ children }) {
   const [connectionState, setConnectionState] = useState('connecting')
 
   const listenersRef = useRef(new Map()) // conversationId -> Set<(payload) => void>
+  const typingListenersRef = useRef(new Map()) // conversationId -> Set<(payload) => void>
+  const editedListenersRef = useRef(new Map()) // conversationId -> Set<(payload) => void>
+  const deletedListenersRef = useRef(new Map()) // conversationId -> Set<(payload) => void>
+  const reactionAddedListenersRef = useRef(new Map()) // conversationId -> Set<(payload) => void>
+  const reactionRemovedListenersRef = useRef(new Map()) // conversationId -> Set<(payload) => void>
   const friendListenersRef = useRef(new Set())
   const esRef = useRef(null)
   const attemptRef = useRef(0)
@@ -65,14 +105,35 @@ export function ChatProvider({ children }) {
   // Thread views subscribe here to receive live messages for the
   // conversation they have open, without the context needing to know
   // anything about the currently-mounted route/component.
-  const subscribeToConversation = useCallback((conversationId, callback) => {
-    const map = listenersRef.current
-    if (!map.has(conversationId)) map.set(conversationId, new Set())
-    map.get(conversationId).add(callback)
-    return () => {
-      map.get(conversationId)?.delete(callback)
-    }
-  }, [])
+  const subscribeToConversation = useCallback(
+    (conversationId, callback) => subscribeViaMap(listenersRef.current, conversationId, callback),
+    []
+  )
+
+  // Separate maps per event rather than one and a type tag on the payload —
+  // each keeps its callback contract single-shaped (a typing payload isn't a
+  // message, an edit isn't a delete), so a subscriber never has to branch on
+  // event type to know what it received.
+  const subscribeToTyping = useCallback(
+    (conversationId, callback) => subscribeViaMap(typingListenersRef.current, conversationId, callback),
+    []
+  )
+  const subscribeToMessageEdited = useCallback(
+    (conversationId, callback) => subscribeViaMap(editedListenersRef.current, conversationId, callback),
+    []
+  )
+  const subscribeToMessageDeleted = useCallback(
+    (conversationId, callback) => subscribeViaMap(deletedListenersRef.current, conversationId, callback),
+    []
+  )
+  const subscribeToReactionAdded = useCallback(
+    (conversationId, callback) => subscribeViaMap(reactionAddedListenersRef.current, conversationId, callback),
+    []
+  )
+  const subscribeToReactionRemoved = useCallback(
+    (conversationId, callback) => subscribeViaMap(reactionRemovedListenersRef.current, conversationId, callback),
+    []
+  )
 
   // FriendsContext hooks in here rather than opening a second SSE
   // connection/ticket of its own — the server forwards a "friend" event over
@@ -109,6 +170,27 @@ export function ChatProvider({ children }) {
       return next
     })
   }, [refreshConversations])
+
+  // Patches the other participant's last-read timestamp in place on a live
+  // "read" event, so an open thread's "Read" tick updates without a refetch
+  // — see GET /conversations's otherLastReadAt (src/routes/chat.js).
+  const updateOtherLastReadAt = useCallback((conversationId, lastReadAt) => {
+    setConversations((prev) =>
+      prev.map((c) => (c.id === conversationId ? { ...c, otherLastReadAt: lastReadAt } : c))
+    )
+  }, [])
+
+  // Keeps the conversation-list preview from showing stale/deleted text
+  // after an edit or delete of whichever message it was last showing —
+  // patches only when the edited/deleted id is actually the cached preview.
+  const updateCachedLastMessage = useCallback((conversationId, messageId, patch) => {
+    setConversations((prev) =>
+      prev.map((c) => {
+        if (c.id !== conversationId || c.lastMessage?.id !== messageId) return c
+        return { ...c, lastMessage: { ...c.lastMessage, ...patch } }
+      })
+    )
+  }, [])
 
   // `scheduleReconnect` and `connect` call each other; a ref sidesteps the
   // definition-order/exhaustive-deps tangle a direct useCallback reference
@@ -147,27 +229,36 @@ export function ChatProvider({ children }) {
       attemptRef.current = 0
       setConnectionState('connected')
     }
-    es.addEventListener('message', (evt) => {
-      try {
-        handleIncomingMessage(JSON.parse(evt.data))
-      } catch {
-        // ignore malformed payloads
-      }
+    addJsonListener(es, 'message', handleIncomingMessage)
+    addJsonListener(es, 'typing', (payload) => {
+      dispatchViaMap(typingListenersRef.current, payload.conversationId, payload)
     })
-    es.addEventListener('friend', (evt) => {
-      try {
-        const payload = JSON.parse(evt.data)
-        friendListenersRef.current.forEach((cb) => cb(payload))
-      } catch {
-        // ignore malformed payloads
-      }
+    addJsonListener(es, 'message-edited', (payload) => {
+      dispatchViaMap(editedListenersRef.current, payload.conversationId, payload)
+      updateCachedLastMessage(payload.conversationId, payload.id, { body: payload.body, editedAt: payload.editedAt })
+    })
+    addJsonListener(es, 'message-deleted', (payload) => {
+      dispatchViaMap(deletedListenersRef.current, payload.conversationId, payload)
+      updateCachedLastMessage(payload.conversationId, payload.id, { body: null, deletedAt: payload.deletedAt })
+    })
+    addJsonListener(es, 'reaction-added', (payload) => {
+      dispatchViaMap(reactionAddedListenersRef.current, payload.conversationId, payload)
+    })
+    addJsonListener(es, 'reaction-removed', (payload) => {
+      dispatchViaMap(reactionRemovedListenersRef.current, payload.conversationId, payload)
+    })
+    addJsonListener(es, 'read', (payload) => {
+      updateOtherLastReadAt(payload.conversationId, payload.lastReadAt)
+    })
+    addJsonListener(es, 'friend', (payload) => {
+      friendListenersRef.current.forEach((cb) => cb(payload))
     })
     es.onerror = () => {
       es.close()
       if (esRef.current === es) esRef.current = null
       scheduleReconnect()
     }
-  }, [token, handleIncomingMessage, scheduleReconnect])
+  }, [token, handleIncomingMessage, updateCachedLastMessage, updateOtherLastReadAt, scheduleReconnect])
   connectRef.current = connect
 
   useEffect(() => {
@@ -209,6 +300,19 @@ export function ChatProvider({ children }) {
     [token]
   )
 
+  const setConversationMuted = useCallback(
+    async (conversationId, muted) => {
+      setConversations((prev) => prev.map((c) => (c.id === conversationId ? { ...c, muted } : c)))
+      try {
+        await (muted ? muteConversationApi : unmuteConversationApi)(conversationId, token)
+      } catch {
+        // Best-effort, same as markConversationRead above — a failed toggle
+        // just means the setting reverts on the next full refresh.
+      }
+    },
+    [token]
+  )
+
   const startChat = useCallback(
     async (userId) => {
       const summary = await startConversation(userId, token)
@@ -240,8 +344,14 @@ export function ChatProvider({ children }) {
       unreadTotal,
       refreshConversations,
       subscribeToConversation,
+      subscribeToTyping,
+      subscribeToMessageEdited,
+      subscribeToMessageDeleted,
+      subscribeToReactionAdded,
+      subscribeToReactionRemoved,
       subscribeToFriendEvents,
       markConversationRead,
+      setConversationMuted,
       startChat,
     }),
     [
@@ -252,8 +362,14 @@ export function ChatProvider({ children }) {
       unreadTotal,
       refreshConversations,
       subscribeToConversation,
+      subscribeToTyping,
+      subscribeToMessageEdited,
+      subscribeToMessageDeleted,
+      subscribeToReactionAdded,
+      subscribeToReactionRemoved,
       subscribeToFriendEvents,
       markConversationRead,
+      setConversationMuted,
       startChat,
     ]
   )

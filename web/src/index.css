@@ -1,32 +1,69 @@
+/* ---- "The Claim Ticket" design tokens -------------------------------------
+   This app's whole mechanic is a private code handed from one person to
+   another (no public directory, no groups) — closer to a claim check than a
+   social feed. The palette/type system below draws from personal
+   correspondence and postal artifacts (ink, paper, a stamped mark) rather
+   than the generic SaaS-violet look this replaces. --accent carries that
+   "ink" role everywhere it's already used (buttons, links, focus ring); the
+   new --seal is intentionally NOT a second general-purpose accent — it's
+   reserved for the TicketId component alone, so the one bold color choice
+   stays in the one place it's meant to be noticed. */
 :root {
-  --text: #1c1b22;
-  --text-muted: #57525f;
-  --bg: #fff;
-  --bg-subtle: #f5f4f8;
+  --text: #211f1c;
+  --text-muted: #5c574f;
+  --bg: #fbfaf8;
+  --bg-subtle: #f1eee7;
   --bg-raised: #fff;
-  --border: #d9d7de;
-  --border-strong: #b9b6c2;
-  --accent: #6d28d9;
-  --accent-hover: #5b21b6;
-  --accent-soft: #f2ecfd;
+  --border: #dedad1;
+  /* Darkened from an earlier #b6afa0 (~2.1:1) — WCAG 1.4.11 requires 3:1 for
+     UI-component boundaries (input/button/select borders use this, not just
+     decorative dividers), and this is the value every focusable control's
+     visible edge depends on. ~3.4:1 here, same hue family as --border. */
+  --border-strong: #8f8676;
+  --accent: #22315c;
+  --accent-hover: #33447a;
+  --accent-soft: #e7eaf3;
   --danger: #b3261e;
   --danger-bg: #fdeceb;
   --ok: #17643f;
   --ok-bg: #e6f4ec;
   --warn-bg: #fdf1dc;
-  --ring: #6d28d9;
+  --ring: var(--accent);
+  --seal: #7a2a33;
 
   /* Text painted on a solid --accent or --danger fill (buttons, chat
      bubbles, unread badges, the active nav pill). White works while those
-     are the light-mode's saturated purple/red, but dark mode turns both
-     pale (lavender / salmon) — white-on-pale drops to ~2:1. Fixed here
-     instead of every filled surface hardcoding #fff. */
+     are the light-mode's saturated ink/red, but dark mode turns --accent
+     pale (periwinkle) — white-on-pale drops to ~2:1. Fixed here instead of
+     every filled surface hardcoding #fff. */
   --accent-contrast: #fff;
 
   /* Every control is at least this tall — a comfortable tap target on
-     mobile, and 36px targets get mis-hit. */
+     mobile, and 36px targets get mis-hit. Two documented exceptions, both
+     narrower on purpose: --tap-compact for chrome that must not dominate the
+     content it frames (nav, banners, composer icon buttons), and --tap-inline
+     for chips sitting inside the message stream, where every neighbouring
+     target is another chip — a mis-hit toggles the wrong reaction rather than
+     firing anything destructive, so density wins over margin for error. */
   --tap: 46px;
-  --radius: 10px;
+  --tap-compact: 40px;
+  --tap-inline: 28px;
+  --radius: 8px;
+  --radius-sm: 4px;
+
+  /* Tinted with --accent at low opacity ("paper casting a soft shadow")
+     rather than generic grey — this file had exactly one box-shadow before
+     this pass. Kept to two steps, used only on genuinely raised surfaces
+     (cards, popovers, the ticket stub), not everywhere. */
+  --shadow-sm: 0 1px 3px rgba(34, 49, 92, 0.1), 0 1px 2px rgba(34, 49, 92, 0.06);
+  --shadow-md: 0 4px 16px rgba(34, 49, 92, 0.14);
+
+  /* Structural/label role (wordmark, eyebrows, timestamps, the ticket
+     code) — never used for paragraphs. Self-hosted, see main.jsx. */
+  --font-mono: 'IBM Plex Mono', ui-monospace, 'SFMono-Regular', Menlo, monospace;
+  /* Reading role, scoped to message-bubble body text only — everywhere
+     else (buttons, inputs, lists) stays on the system sans below. */
+  --font-serif: 'Source Serif 4', Georgia, 'Times New Roman', serif;
 
   font: 17px/1.55 system-ui, 'Segoe UI', Roboto, sans-serif;
   color-scheme: light dark;
@@ -38,22 +75,30 @@
   :root {
     --text: #edecf1;
     --text-muted: #a8a3b3;
-    --bg: #15161c;
-    --bg-subtle: #1e1f27;
-    --bg-raised: #24252f;
+    --bg: #181a22;
+    --bg-subtle: #1c1e29;
+    --bg-raised: #20222c;
     --border: #34363f;
-    --border-strong: #4a4c58;
-    --accent: #c4a2fd;
-    --accent-hover: #d3bafe;
-    --accent-soft: #2a2140;
+    /* Lightened from an earlier #4a4c58 (~2.0:1) for the same WCAG 1.4.11
+       reason as the light-mode value above — ~3.3:1 here, same cool-gray
+       hue family as --border. */
+    --border-strong: #6a6c78;
+    --accent: #8fa3e8;
+    --accent-hover: #a9baf0;
+    --accent-soft: #26304a;
     --danger: #ff9d95;
     --danger-bg: #3d1f1d;
     --ok: #7fdcab;
     --ok-bg: #14301f;
     --warn-bg: #3a2f16;
-    --ring: #c4a2fd;
+    --seal: #d98a93;
 
-    --accent-contrast: #15161c;
+    --accent-contrast: #181a22;
+
+    /* A low-opacity ink tint reads as nothing against a dark surface —
+       shadows here are plain black at higher opacity instead. */
+    --shadow-sm: 0 1px 3px rgba(0, 0, 0, 0.4), 0 1px 2px rgba(0, 0, 0, 0.3);
+    --shadow-md: 0 4px 16px rgba(0, 0, 0, 0.5);
   }
 }
 
@@ -66,12 +111,17 @@ body {
 }
 
 h1 {
-  font-size: 28px;
+  font-family: var(--font-mono);
+  font-weight: 500;
+  letter-spacing: -0.01em;
+  font-size: 26px;
   margin: 0 0 16px;
 }
 
 h2 {
-  font-size: 18px;
+  font-family: var(--font-mono);
+  font-weight: 500;
+  font-size: 16px;
   margin: 0 0 12px;
 }
 
@@ -79,18 +129,21 @@ a {
   color: var(--accent);
 }
 
+/* The only link hover in this file used to be .navbar a. Scoped to .card
+   rather than applied globally on purpose: a bare a:hover:not(.button) would
+   outrank .navbar a and break the nav's pill hover, and the app's other
+   anchors (conversation rows, attachment chips) live outside any card and
+   carry their own treatments. This one selector covers the forgot-password /
+   sign-up / back-to-login links across all six auth pages. */
+.card a:not(.button):hover {
+  color: var(--accent-hover);
+  text-decoration-thickness: 2px;
+}
+
 .layout {
   min-height: 100svh;
   display: flex;
   flex-direction: column;
-}
-
-.navbar {
-  display: flex;
-  align-items: center;
-  gap: 16px;
-  padding: 12px 24px;
-  border-bottom: 1px solid var(--border);
 }
 
 .navbar a {
@@ -135,23 +188,43 @@ a {
 .auth-brand {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: 10px;
   margin-bottom: 20px;
-  font-size: 20px;
-  font-weight: 700;
+  font-family: var(--font-mono);
+  font-size: 18px;
+  font-weight: 500;
+  letter-spacing: 0.02em;
   color: var(--text);
 }
 
+/* Holds the claim-ticket glyph from AuthBrand.jsx. The glyph inherits
+   `color` rather than carrying its own fill, which is why --accent-contrast
+   is set here — it flips with the theme so the mark never goes white-on-pale
+   in dark mode. (The font declarations this rule used to carry went with the
+   letter "C" the glyph replaced.) */
 .auth-brand-mark {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 36px;
-  height: 36px;
-  border-radius: 10px;
+  flex-shrink: 0;
+  width: 32px;
+  height: 32px;
+  border-radius: var(--radius-sm);
   background: var(--accent);
   color: var(--accent-contrast);
-  font-size: 18px;
+}
+
+/* Layout.jsx's navbar — smaller, inline with nav links, no page-hero
+   spacing below it. */
+.auth-brand.compact {
+  gap: 8px;
+  margin-bottom: 0;
+  font-size: 15px;
+}
+
+.auth-brand.compact .auth-brand-mark {
+  width: 26px;
+  height: 26px;
 }
 
 /* A labeled rule between the primary sign-in action and "Continue with
@@ -177,7 +250,8 @@ a {
 .card {
   background: var(--bg-subtle);
   border: 1px solid var(--border);
-  border-radius: 8px;
+  border-radius: var(--radius);
+  box-shadow: var(--shadow-sm);
   padding: 24px;
   width: 100%;
   max-width: 400px;
@@ -189,14 +263,6 @@ a {
 .inline-form {
   max-width: none;
   margin-bottom: 24px;
-}
-
-label {
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-  font-size: 14px;
-  text-align: left;
 }
 
 input,
@@ -217,12 +283,32 @@ select:hover {
   border-color: var(--accent);
 }
 
+/* Only button:disabled existed, so a disabled field was indistinguishable
+   from an editable one — the Account page disables its inputs mid-save. */
+input:disabled,
+select:disabled,
+textarea:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+/* UA placeholder colours vary and several inputs here carry load-bearing
+   placeholders (the friend-lookup ID example, the in-thread search). */
+::placeholder {
+  color: var(--text-muted);
+  opacity: 1;
+}
+
 /* One visible focus treatment for every control, so keyboard and switch users
-   can always tell where they are. */
+   can always tell where they are. Deliberately :where() (zero specificity) so
+   a component can still override it — raising the specificity would make this
+   beat rules like .chat-conversation-row's square corners. For the same
+   reason there's no border-radius here: the outline already follows each
+   element's own radius, and forcing one would round the corners of the
+   controls that are meant to be square. */
 :where(input, select, button, textarea, a):focus-visible {
   outline: 3px solid var(--ring);
   outline-offset: 2px;
-  border-radius: var(--radius);
 }
 
 button {
@@ -256,34 +342,28 @@ button:disabled {
   }
 }
 
+/* An <a> styled as a button has no UA height or text centring, so next to a
+   real <button> (which gets --tap above, plus centred text) it rendered both
+   shorter and left-aligned — visible on /login and /signup, where "Sign in"
+   and "Continue with Google" sit stacked. inline-flex rather than block so it
+   still shrinks to fit where it's a standalone CTA (.chat-empty). Kept off
+   .btn-secondary, which stays a pure colour skin usable on real buttons. */
 .button {
-  display: inline-block;
-  padding: 8px 14px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: var(--tap);
+  /* Padding and border match the base button rule exactly, not approximately:
+     a real <button> resolves to 48px here (26px line + 20px padding + 2px
+     border), so anything less leaves the two stacked actions on /login
+     visibly mismatched. .btn-secondary re-colours this border afterwards. */
+  padding: 10px 14px;
+  border: 1px solid var(--accent);
   background: var(--accent);
   color: var(--accent-contrast);
-  border-radius: 6px;
+  border-radius: var(--radius);
   text-decoration: none;
-  font-weight: 500;
-}
-
-.error {
-  color: var(--danger);
-  background: var(--danger-bg);
-  padding: 8px 12px;
-  border-radius: 6px;
-  font-size: 14px;
-}
-
-.table {
-  width: 100%;
-  border-collapse: collapse;
-}
-
-.table th,
-.table td {
-  text-align: left;
-  padding: 8px 12px;
-  border-bottom: 1px solid var(--border);
+  font-weight: 600;
 }
 
 .search-input {
@@ -291,14 +371,33 @@ button:disabled {
   max-width: 320px;
 }
 
-.notice {
-  color: var(--accent);
-  background: var(--bg-subtle);
-  border: 1px solid var(--border);
+/* A step still worth doing, not (yet) a mistake — --warn-bg is exactly the
+   "notice, but amber" register this calls for. */
+.account-verify-banner {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
   padding: 8px 12px;
-  border-radius: 6px;
+  border-radius: var(--radius-sm);
+  background: var(--warn-bg);
   font-size: 14px;
   margin-bottom: 16px;
+}
+
+/* Had no rule at all, so its <input> and <button> children (both
+   inline-level) flowed onto one line with no gap and wrapped raggedly inside
+   the 400px card. Stacked rather than laid out as a row like
+   .friends-lookup-form, to match how this card's other control group (the
+   password form's label/input/button) already reads. */
+.account-custom-id {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.turnstile-widget {
+  margin-bottom: 8px;
 }
 
 .language-select {
@@ -306,25 +405,18 @@ button:disabled {
   font-size: 13px;
 }
 
-.hint {
-  font-size: 13px;
-  color: var(--text-muted);
-}
-
 /* ---- Clarity pass -------------------------------------------------------
    The primary action has to be unmistakable, and every row/label needs
    enough contrast and size to be scanned quickly rather than read carefully. */
 
 /* Secondary actions read as secondary instead of competing with the primary one. */
-.btn-secondary,
-button.secondary {
+.btn-secondary {
   background: var(--bg);
   color: var(--accent);
   border: 1px solid var(--border-strong);
 }
 
-.btn-secondary:hover:not(:disabled),
-button.secondary:hover:not(:disabled) {
+.btn-secondary:hover:not(:disabled) {
   background: var(--accent-soft);
   border-color: var(--accent);
   color: var(--accent);
@@ -365,54 +457,52 @@ button.btn-secondary-danger:hover:not(:disabled) {
 
 /* Labels were 14px and easy to skip past when filling a form in a hurry. */
 label {
+  display: flex;
+  flex-direction: column;
+  text-align: left;
   font-size: 15px;
   font-weight: 550;
   gap: 6px;
   margin-bottom: 4px;
 }
 
-/* Tables are scanned, not read: roomier rows, a header that reads as a header,
-   and a hover cue so the eye can track across a wide row. */
-table {
-  width: 100%;
-  border-collapse: collapse;
+/* Off-screen until focused (Tab from the top of the page lands here first) —
+   lets a keyboard/screen-reader user jump straight past the nav instead of
+   tabbing through every link on every single page load. */
+.skip-link {
+  position: absolute;
+  top: -40px;
+  left: 8px;
+  z-index: 100;
+  padding: 8px 14px;
+  background: var(--bg-raised);
+  color: var(--accent);
+  border: 1px solid var(--border-strong);
+  border-radius: 8px;
 }
 
-th {
-  font-size: 13px;
-  text-transform: uppercase;
-  letter-spacing: 0.06em;
-  color: var(--text-muted);
-  font-weight: 700;
-  border-bottom: 2px solid var(--border-strong);
-  padding: 12px 10px;
-  text-align: left;
-}
-
-td {
-  padding: 14px 10px;
-  border-bottom: 1px solid var(--border);
-  vertical-align: middle;
-}
-
-tbody tr:hover {
-  background: var(--bg-subtle);
-}
-
-/* Money/counters (if any future screen needs them) line up in columns. */
-td:has(+ td) {
-  font-variant-numeric: tabular-nums;
+.skip-link:focus {
+  top: 8px;
 }
 
 /* Nav: show where you are, and give links a real hit area. Scrolls sideways
    rather than wrapping — a wrapped nav pushes items onto their own line and
-   shifts the whole page down. */
+   shifts the whole page down. (Was split across two .navbar blocks, the
+   earlier one's gap/padding silently dead; merged here where the reasoning
+   already lived.) */
 .navbar {
+  display: flex;
+  align-items: center;
   gap: 2px;
   padding: 8px 16px;
+  border-bottom: 1px solid var(--border);
   flex-wrap: nowrap;
   overflow-x: auto;
   scrollbar-width: thin;
+}
+
+.navbar .auth-brand.compact {
+  margin-right: 10px;
 }
 
 .navbar > * {
@@ -429,13 +519,13 @@ td:has(+ td) {
 }
 
 .navbar button {
-  min-height: 40px;
+  min-height: var(--tap-compact);
   padding: 8px 14px;
   white-space: nowrap;
 }
 
 .navbar select {
-  min-height: 40px;
+  min-height: var(--tap-compact);
   padding: 6px 8px;
 }
 
@@ -526,20 +616,65 @@ td:has(+ td) {
   color: var(--text-muted);
 }
 
-.friends-own-id-row {
+/* ---- TicketId (the "claim ticket" signature element) ----------------------
+   See web/src/components/TicketId.jsx for why this exists and where it's
+   used — deliberately exactly two places, never spread further. */
+.ticket-id {
   display: flex;
   align-items: center;
   gap: 12px;
+  flex-wrap: wrap;
 }
 
-.friends-id-code {
-  font-size: 22px;
-  font-weight: 700;
-  letter-spacing: 0.08em;
-  padding: 8px 14px;
+.ticket-id-stub {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 12px 18px;
+  background: var(--bg-raised);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  box-shadow: var(--shadow-sm);
+}
+
+/* Two half-circle "punches," coloured to match the surface this ticket sits
+   on (a --bg-subtle card, in both places it's used) — the coupon/claim-check
+   cue that this piece was torn off a perforated sheet. */
+.ticket-id-stub::before,
+.ticket-id-stub::after {
+  content: '';
+  position: absolute;
+  left: -8px;
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
   background: var(--bg-subtle);
   border: 1px solid var(--border);
-  border-radius: var(--radius);
+}
+
+.ticket-id-stub::before {
+  top: -9px;
+}
+
+.ticket-id-stub::after {
+  bottom: -9px;
+}
+
+.ticket-id-mark {
+  flex-shrink: 0;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--seal);
+}
+
+.ticket-id-code {
+  font-family: var(--font-mono);
+  font-weight: 500;
+  font-size: 19px;
+  letter-spacing: 0.12em;
+  color: var(--text);
   font-variant-numeric: tabular-nums;
 }
 
@@ -572,12 +707,27 @@ td:has(+ td) {
   min-width: 120px;
 }
 
+/* A friend row is an avatar, a name, and three buttons
+   (Message/Remove/Block). On a phone those don't fit one line, and bare
+   flex-wrap breaks them into a ragged stack with an orphaned button. Basing
+   the name on "everything except the avatar" (44px avatar + 12px gap) keeps
+   avatar and name together on the first line and pushes all three buttons
+   onto the second, where they share the width evenly. Has to sit after the
+   rule above, whose `flex: 1` shorthand also sets flex-basis. */
+@media (max-width: 640px) {
+  .friend-row .chat-conversation-main {
+    flex-basis: calc(100% - 56px);
+  }
+
+  .friend-row button {
+    flex: 1 1 auto;
+  }
+}
+
 /* ---- Chat (1:1 direct messages) -----------------------------------------
-   A back-office screen checked between POS tasks, sometimes on a phone: list
-   pane + thread pane side by side above 780px — the same width pos-layout
-   already collapses at, since both are "two working columns that stop
-   fitting their comfortable minimums." Below it, one pane at a time with a
-   route-driven back button standing in for the second column. */
+   List pane + thread pane side by side above 780px — below that, both stop
+   fitting their comfortable minimums, so it's one pane at a time instead,
+   with a route-driven back button standing in for the second column. */
 
 .chat-layout {
   display: flex;
@@ -656,11 +806,17 @@ td:has(+ td) {
   background: var(--bg-subtle);
 }
 
-/* Selected state carries a left rail plus a tint, not colour alone — the
-   same pairing the payment-method ring uses in the POS. */
+/* Selected state carries a left rail plus a tint, not colour alone. */
 .chat-conversation-row.active {
   background: var(--accent-soft);
   border-left-color: var(--accent);
+}
+
+/* Without this the selected row is the one row with no hover feedback — the
+   generic .chat-conversation-row:hover above is overridden by .active. */
+.chat-conversation-row.active:hover {
+  background: var(--accent-soft);
+  border-left-color: var(--accent-hover);
 }
 
 .chat-avatar {
@@ -717,13 +873,6 @@ td:has(+ td) {
   font-weight: 600;
 }
 
-.chat-user-result-sub {
-  flex-shrink: 0;
-  font-size: 13px;
-  font-weight: 600;
-  color: var(--accent);
-}
-
 .chat-conversation-meta {
   flex-shrink: 0;
   display: flex;
@@ -733,6 +882,7 @@ td:has(+ td) {
 }
 
 .chat-timestamp {
+  font-family: var(--font-mono);
   font-size: 12px;
   color: var(--text-muted);
   white-space: nowrap;
@@ -757,6 +907,21 @@ td:has(+ td) {
 /* Nav gets the same badge, smaller, and inverted when the link itself is
    already an accent-filled active pill so the badge doesn't disappear into
    its own background. */
+/* Visually hidden but still reachable by screen readers — used for text
+   that would be redundant on-screen (the badge already shows the number)
+   but is needed for the aria-live announcement to make sense on its own. */
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+
 .chat-nav-badge {
   display: inline-flex;
   align-items: center;
@@ -778,8 +943,13 @@ td:has(+ td) {
   color: var(--accent);
 }
 
+/* .empty-state shares this rather than getting a parallel rule of its own —
+   a dead end is a dead end whether it's an empty thread list or an empty
+   friends list, and the two should not drift apart. (flex: 1 is inert where
+   the element isn't a flex item, e.g. inside a .card.) */
 .chat-empty,
-.chat-thread-placeholder {
+.chat-thread-placeholder,
+.empty-state {
   flex: 1;
   display: flex;
   flex-direction: column;
@@ -793,10 +963,23 @@ td:has(+ td) {
 }
 
 .chat-empty strong,
-.chat-thread-placeholder strong {
+.chat-thread-placeholder strong,
+.empty-state strong {
   color: var(--text);
   font-size: 16px;
   font-weight: 650;
+}
+
+/* A transient one-line "loading…" is not a boxed message — .hint gives it a
+   border and a fill, which reads as an empty input or a disabled button
+   sitting in the middle of the pane (the same misuse .friends-caption above
+   exists to avoid). Unboxed and centred instead. */
+.loading-note {
+  display: block;
+  padding: 20px 16px;
+  text-align: center;
+  color: var(--text-muted);
+  font-size: 14px;
 }
 
 /* -- Thread pane -- */
@@ -832,6 +1015,59 @@ td:has(+ td) {
   font-size: 16px;
 }
 
+.chat-thread-header-spacer {
+  flex: 1;
+}
+
+/* Transparent icon buttons must restate `color`. Nulling out `background`
+   and `border` alone leaves them inheriting `color: var(--accent-contrast)`
+   (#fff) from the base button rule, which on this --bg-raised header is
+   white-on-white — invisible to anything but a colour emoji, which ignores
+   `color` entirely. Same fix applies to every transparent button below. */
+.chat-thread-search-btn,
+.chat-thread-mute-btn {
+  flex-shrink: 0;
+  min-width: var(--tap);
+  min-height: var(--tap);
+  background: none;
+  border: none;
+  border-radius: var(--radius);
+  color: var(--text-muted);
+  cursor: pointer;
+  font-size: 16px;
+}
+
+.chat-thread-search-btn:hover:not(:disabled),
+.chat-thread-mute-btn:hover:not(:disabled) {
+  background: var(--bg-subtle);
+  color: var(--accent);
+}
+
+.chat-search-bar {
+  flex-shrink: 0;
+  padding: 8px 16px;
+  border-bottom: 1px solid var(--border);
+  background: var(--bg-raised);
+}
+
+.chat-search-result-row {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 10px 4px;
+  border-bottom: 1px solid var(--border);
+}
+
+.chat-search-result-meta {
+  font-size: 12px;
+  color: var(--text-muted);
+}
+
+.chat-search-result-body {
+  font-size: 14px;
+  word-break: break-word;
+}
+
 .chat-stream-banner {
   flex-shrink: 0;
   display: flex;
@@ -854,7 +1090,7 @@ td:has(+ td) {
 
 .chat-stream-banner button {
   margin-left: auto;
-  min-height: 36px;
+  min-height: var(--tap-compact);
   padding: 4px 12px;
   font-size: 13px;
 }
@@ -869,12 +1105,26 @@ td:has(+ td) {
   overscroll-behavior: contain;
 }
 
+/* Was --text-muted left sitting on the base button rule's solid --accent
+   fill (~1.6:1, unreadable). It's a centred pill floating in the message
+   stream, which is exactly what .chat-date-separator span below already is —
+   so it borrows that treatment rather than inventing a third one. */
 .chat-load-more {
   align-self: center;
   padding: 8px 14px;
   margin-bottom: 8px;
   font-size: 13px;
+  font-weight: 600;
   color: var(--text-muted);
+  background: var(--bg-subtle);
+  border: 1px solid var(--border);
+  border-radius: 999px;
+}
+
+.chat-load-more:hover:not(:disabled) {
+  background: var(--bg-raised);
+  border-color: var(--border);
+  color: var(--text);
 }
 
 .chat-date-separator {
@@ -884,6 +1134,7 @@ td:has(+ td) {
 }
 
 .chat-date-separator span {
+  font-family: var(--font-mono);
   font-size: 12px;
   font-weight: 600;
   color: var(--text-muted);
@@ -924,10 +1175,16 @@ td:has(+ td) {
   max-width: min(72%, 480px);
 }
 
+/* The one place --font-serif is used, exactly as the token block describes:
+   message bodies are the only running prose in the app. Bumped 15px -> 16px
+   because Source Serif 4 sets optically smaller than the system sans it
+   replaces at the same nominal size. Thai has no serif subset here and falls
+   through to the generic serif family — checked, and it stays legible. */
 .chat-bubble {
   padding: 10px 14px;
-  border-radius: 16px;
-  font-size: 15px;
+  border-radius: 10px;
+  font-family: var(--font-serif);
+  font-size: 16px;
   line-height: 1.5;
   word-break: break-word;
   white-space: pre-wrap;
@@ -951,6 +1208,7 @@ td:has(+ td) {
 .chat-bubble-time {
   display: block;
   margin-top: 4px;
+  font-family: var(--font-mono);
   font-size: 11px;
   font-variant-numeric: tabular-nums;
   color: var(--text-muted);
@@ -959,6 +1217,110 @@ td:has(+ td) {
 .chat-bubble-row.mine .chat-bubble-time {
   color: var(--accent-contrast);
   opacity: 0.75;
+}
+
+.chat-bubble.deleted {
+  background: transparent;
+  border: 1px dashed var(--border);
+  color: var(--text-muted);
+  font-style: italic;
+}
+
+.chat-bubble-edited-tag {
+  font-size: 11px;
+  opacity: 0.7;
+}
+
+.chat-bubble-read-tag {
+  font-weight: 600;
+}
+
+.chat-bubble-edit {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 8px;
+  border-radius: 16px;
+  border: 1px solid var(--border);
+  background: var(--bg-raised);
+}
+
+.chat-bubble-edit-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+/* Hidden until the row is hovered/focused so the bubble list doesn't stay
+   cluttered with icon buttons on every one of the caller's own messages. */
+.chat-bubble-actions {
+  display: flex;
+  gap: 4px;
+  margin-top: 2px;
+  opacity: 0;
+  transition: opacity 0.1s;
+}
+
+.chat-bubble-row:hover .chat-bubble-actions,
+.chat-bubble-actions:focus-within {
+  opacity: 1;
+}
+
+.chat-bubble-action-btn {
+  background: none;
+  border: none;
+  border-radius: var(--radius-sm);
+  color: var(--text-muted);
+  cursor: pointer;
+  font-size: 13px;
+  padding: 2px 4px;
+}
+
+.chat-bubble-action-btn:hover:not(:disabled) {
+  background: var(--bg-subtle);
+  color: var(--text);
+}
+
+.chat-bubble-reaction-trigger-wrap {
+  position: relative;
+  display: inline-flex;
+}
+
+/* Unlike chat-bubble-actions, reaction pills are a persistent summary of who
+   reacted — always visible once there's at least one, not just on hover. */
+.chat-bubble-reactions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin-top: 4px;
+}
+
+.chat-bubble-reactions.mine {
+  justify-content: flex-end;
+}
+
+.chat-reaction-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  min-height: var(--tap-inline);
+  padding: 2px 10px;
+  font-size: 12px;
+  line-height: 1.4;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  background: var(--bg-subtle);
+  color: var(--text);
+  cursor: pointer;
+}
+
+.chat-reaction-pill.mine {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+}
+
+.chat-reaction-pill:hover:not(:disabled) {
+  background: var(--bg-raised);
 }
 
 /* A failed send stays visible in the thread rather than vanishing — the
@@ -992,6 +1354,15 @@ td:has(+ td) {
   background: var(--danger-bg);
 }
 
+.chat-typing-indicator {
+  flex-shrink: 0;
+  min-height: 20px;
+  padding: 0 16px;
+  font-size: 12px;
+  font-style: italic;
+  color: var(--text-muted);
+}
+
 .chat-composer {
   flex-shrink: 0;
   display: flex;
@@ -1010,6 +1381,163 @@ td:has(+ td) {
 .chat-composer button {
   flex-shrink: 0;
   min-width: 88px;
+}
+
+.chat-composer-emoji-wrap {
+  position: relative;
+  flex-shrink: 0;
+}
+
+/* min-height beats height, so without overriding the base rule's --tap these
+   were 36x46 ellipses rather than circles. Every round icon button below
+   needs the explicit min-height for the same reason. */
+.chat-composer-emoji-wrap .chat-composer-emoji-btn {
+  min-width: unset;
+  min-height: var(--tap-compact);
+  width: var(--tap-compact);
+  height: var(--tap-compact);
+  padding: 0;
+  border-radius: 50%;
+  border: 1px solid var(--border);
+  background: var(--bg-subtle);
+  color: var(--text);
+  font-size: 18px;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.chat-composer-emoji-wrap .chat-composer-emoji-btn:hover:not(:disabled) {
+  background: var(--bg-raised);
+}
+
+.emoji-picker {
+  position: absolute;
+  bottom: calc(100% + 8px);
+  left: 0;
+  z-index: 10;
+  display: grid;
+  grid-template-columns: repeat(5, 1fr);
+  gap: 4px;
+  width: 220px;
+  max-height: 220px;
+  overflow-y: auto;
+  padding: 8px;
+  background: var(--bg-raised);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow-md);
+}
+
+/* The reaction trigger on "mine" messages sits near the right edge of the
+   thread column — anchoring the 220px-wide grid to its left edge (the
+   default above) pushes most of it off-screen on a narrow viewport. Grow
+   from the right edge of the trigger instead, so it stays on-screen. */
+.chat-bubble-row.mine .chat-bubble-reaction-trigger-wrap .emoji-picker {
+  left: auto;
+  right: 0;
+}
+
+/* Held at 36 rather than --tap-compact: 5 columns of 40 plus gaps and the
+   grid's own padding overflows the 220px picker. Safe here because every
+   neighbouring target is another emoji in the same grid. */
+.emoji-picker-item {
+  min-width: unset;
+  min-height: 36px;
+  width: 36px;
+  height: 36px;
+  padding: 0;
+  border: none;
+  background: transparent;
+  color: var(--text);
+  font-size: 20px;
+  line-height: 1;
+  border-radius: 6px;
+  cursor: pointer;
+}
+
+.emoji-picker-item:hover:not(:disabled) {
+  background: var(--bg-subtle);
+}
+
+.chat-composer-file-input {
+  display: none;
+}
+
+/* Needs the .chat-composer prefix to outrank `.chat-composer button`'s
+   min-width: 88px (which is meant for the Send button) — without it this
+   rendered as an 88px-wide pill, not a round icon button. The emoji button
+   above only escapes the same fate because its selector is two classes deep. */
+.chat-composer .chat-composer-attach-btn {
+  flex-shrink: 0;
+  min-width: unset;
+  min-height: var(--tap-compact);
+  width: var(--tap-compact);
+  height: var(--tap-compact);
+  padding: 0;
+  border-radius: 50%;
+  border: 1px solid var(--border);
+  background: var(--bg-subtle);
+  color: var(--text);
+  font-size: 16px;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.chat-composer-attach-btn:hover:not(:disabled) {
+  background: var(--bg-raised);
+}
+
+.chat-composer-attach-btn:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.chat-attachment-image-link {
+  display: block;
+}
+
+.chat-attachment-image {
+  display: block;
+  max-width: 240px;
+  max-height: 240px;
+  border-radius: 8px;
+  margin-bottom: 4px;
+  object-fit: cover;
+}
+
+.chat-attachment-file {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px;
+  margin-bottom: 4px;
+  border-radius: 8px;
+  background: var(--bg-subtle);
+  text-decoration: none;
+  color: inherit;
+}
+
+.chat-attachment-file-icon {
+  font-size: 24px;
+}
+
+.chat-attachment-file-info {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.chat-attachment-file-name {
+  font-size: 14px;
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.chat-attachment-file-size {
+  font-size: 12px;
+  opacity: 0.7;
 }
 
 @media (max-width: 780px) {

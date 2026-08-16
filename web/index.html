@@ -7,7 +7,15 @@
     <title>Chat</title>
 
     <link rel="manifest" href="/manifest.webmanifest" />
-    <meta name="theme-color" content="#6d28d9" />
+
+    <!-- Both values are the design tokens from index.css, not independent
+         choices: #22315c is --accent (the "ink" the whole UI is built on) and
+         #181a22 is dark mode's --bg. Two entries because a single theme-color
+         leaves the browser chrome light while the app is dark. These were
+         #6d28d9 (violet) — left over from the palette the Claim Ticket
+         design replaced, so the browser chrome never matched the app. -->
+    <meta name="theme-color" media="(prefers-color-scheme: light)" content="#22315c" />
+    <meta name="theme-color" media="(prefers-color-scheme: dark)" content="#181a22" />
 
     <!-- iOS ignores most of the manifest for "Add to Home Screen" and relies
          on these instead (Safari 16.4+ reads manifest icons too, but these

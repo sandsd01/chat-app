@@ -9,9 +9,9 @@ const { EventEmitter } = require("events");
 // Redis pub/sub — don't assume this file does that, it doesn't.
 
 const emitter = new EventEmitter();
-// Many staff/admin users can each have a handful of subscribers (SSE tabs);
-// the default limit of 10 listeners per event name would otherwise print
-// noisy "MaxListenersExceededWarning" logs well before that's a real leak.
+// Many users can each have a handful of subscribers (SSE tabs); the default
+// limit of 10 listeners per event name would otherwise print noisy
+// "MaxListenersExceededWarning" logs well before that's a real leak.
 emitter.setMaxListeners(0);
 
 function channelFor(userId) {

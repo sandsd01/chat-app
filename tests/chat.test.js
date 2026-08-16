@@ -4,6 +4,22 @@ const http = require("node:http");
 const request = require("supertest");
 const { resetDb, createUser, makeFriends, prisma } = require("./helpers/db");
 const app = require("../src/app");
+const chatBus = require("../src/lib/chatBus");
+
+function waitForEvent(userId, eventName, timeoutMs = 500) {
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => {
+      unsubscribe();
+      reject(new Error(`Timed out waiting for "${eventName}" event`));
+    }, timeoutMs);
+    const unsubscribe = chatBus.subscribe(userId, (event, payload) => {
+      if (event !== eventName) return;
+      clearTimeout(timer);
+      unsubscribe();
+      resolve(payload);
+    });
+  });
+}
 
 async function login(email, password) {
   const res = await request(app).post("/api/auth/login").send({ email, password });
@@ -115,6 +131,21 @@ describe("Chat API", () => {
       assert.equal(history.status, 200);
       assert.equal(history.body.data.length, 1);
       assert.equal(history.body.data[0].body, "before unfriending");
+    });
+  });
+
+  describe("POST /chat/uploads", () => {
+    test("503s when attachments aren't configured", async () => {
+      const conv = await request(app)
+        .post("/api/chat/conversations")
+        .set("Authorization", `Bearer ${adminToken}`)
+        .send({ userId: staffUser.id });
+
+      const res = await request(app)
+        .post("/api/chat/uploads")
+        .set("Authorization", `Bearer ${adminToken}`)
+        .send({ conversationId: conv.body.id, fileName: "photo.jpg", mimeType: "image/jpeg", size: 1000 });
+      assert.equal(res.status, 503);
     });
   });
 
@@ -235,6 +266,28 @@ describe("Chat API", () => {
       assert.equal(adminList.body.length, 1);
       assert.equal(adminList.body[0].id, convAdminStaff.body.id);
     });
+
+    test("otherLastReadAt reflects the OTHER participant's own last-read timestamp, not the caller's", async () => {
+      const conv = await request(app)
+        .post("/api/chat/conversations")
+        .set("Authorization", `Bearer ${adminToken}`)
+        .send({ userId: staffUser.id });
+
+      const beforeRead = await request(app)
+        .get("/api/chat/conversations")
+        .set("Authorization", `Bearer ${adminToken}`);
+      assert.equal(beforeRead.body.find((c) => c.id === conv.body.id).otherLastReadAt, null);
+
+      const readRes = await request(app)
+        .post(`/api/chat/conversations/${conv.body.id}/read`)
+        .set("Authorization", `Bearer ${staffToken}`)
+        .send({});
+
+      const afterRead = await request(app)
+        .get("/api/chat/conversations")
+        .set("Authorization", `Bearer ${adminToken}`);
+      assert.equal(afterRead.body.find((c) => c.id === conv.body.id).otherLastReadAt, readRes.body.lastReadAt);
+    });
   });
 
   describe("GET /chat/conversations/:id/messages", () => {
@@ -330,6 +383,89 @@ describe("Chat API", () => {
     });
   });
 
+  describe("GET /chat/conversations/:id/messages/search", () => {
+    async function createConversation(token, userId) {
+      return request(app)
+        .post("/api/chat/conversations")
+        .set("Authorization", `Bearer ${token}`)
+        .send({ userId });
+    }
+
+    async function sendMessage(token, conversationId, body) {
+      return request(app)
+        .post(`/api/chat/conversations/${conversationId}/messages`)
+        .set("Authorization", `Bearer ${token}`)
+        .send({ body });
+    }
+
+    test("requires authentication", async () => {
+      const res = await request(app).get("/api/chat/conversations/1/messages/search?q=hi");
+      assert.equal(res.status, 401);
+    });
+
+    test("404 for a non-participant", async () => {
+      const conv = await createConversation(adminToken, staffUser.id);
+      const res = await request(app)
+        .get(`/api/chat/conversations/${conv.body.id}/messages/search?q=hi`)
+        .set("Authorization", `Bearer ${otherToken}`);
+      assert.equal(res.status, 404);
+    });
+
+    test("400 when q is missing or blank", async () => {
+      const conv = await createConversation(adminToken, staffUser.id);
+
+      const missing = await request(app)
+        .get(`/api/chat/conversations/${conv.body.id}/messages/search`)
+        .set("Authorization", `Bearer ${adminToken}`);
+      assert.equal(missing.status, 400);
+
+      const blank = await request(app)
+        .get(`/api/chat/conversations/${conv.body.id}/messages/search?q=%20%20`)
+        .set("Authorization", `Bearer ${adminToken}`);
+      assert.equal(blank.status, 400);
+    });
+
+    test("400 when q is longer than 200 characters", async () => {
+      const conv = await createConversation(adminToken, staffUser.id);
+      const res = await request(app)
+        .get(`/api/chat/conversations/${conv.body.id}/messages/search?q=${"a".repeat(201)}`)
+        .set("Authorization", `Bearer ${adminToken}`);
+      assert.equal(res.status, 400);
+    });
+
+    test("matches case-insensitively, scoped to this conversation only, newest match first", async () => {
+      const conv = await createConversation(adminToken, staffUser.id);
+      const otherConv = await createConversation(staffToken, otherUser.id);
+
+      await sendMessage(adminToken, conv.body.id, "let's grab Pizza tonight");
+      await sendMessage(staffToken, conv.body.id, "sure, what time?");
+      await sendMessage(adminToken, conv.body.id, "pizza at 7 works");
+      await sendMessage(staffToken, otherConv.body.id, "unrelated pizza message in a different thread");
+
+      const res = await request(app)
+        .get(`/api/chat/conversations/${conv.body.id}/messages/search?q=pizza`)
+        .set("Authorization", `Bearer ${adminToken}`);
+      assert.equal(res.status, 200);
+      assert.equal(res.body.data.length, 2);
+      assert.equal(res.body.data[0].body, "pizza at 7 works");
+      assert.equal(res.body.data[1].body, "let's grab Pizza tonight");
+    });
+
+    test("excludes a soft-deleted message even if it used to match", async () => {
+      const conv = await createConversation(adminToken, staffUser.id);
+      const msg = await sendMessage(adminToken, conv.body.id, "the secret word is banana");
+      await request(app)
+        .delete(`/api/chat/conversations/${conv.body.id}/messages/${msg.body.id}`)
+        .set("Authorization", `Bearer ${adminToken}`);
+
+      const res = await request(app)
+        .get(`/api/chat/conversations/${conv.body.id}/messages/search?q=banana`)
+        .set("Authorization", `Bearer ${adminToken}`);
+      assert.equal(res.status, 200);
+      assert.equal(res.body.data.length, 0);
+    });
+  });
+
   describe("POST /chat/conversations/:id/messages", () => {
     async function createConversation(token, userId) {
       return request(app)
@@ -413,6 +549,362 @@ describe("Chat API", () => {
     });
   });
 
+  describe("PATCH /chat/conversations/:id/messages/:messageId", () => {
+    async function createConversation(token, userId) {
+      return request(app)
+        .post("/api/chat/conversations")
+        .set("Authorization", `Bearer ${token}`)
+        .send({ userId });
+    }
+
+    async function sendMessage(token, conversationId, body) {
+      return request(app)
+        .post(`/api/chat/conversations/${conversationId}/messages`)
+        .set("Authorization", `Bearer ${token}`)
+        .send({ body });
+    }
+
+    test("requires authentication", async () => {
+      const res = await request(app).patch("/api/chat/conversations/1/messages/1").send({ body: "x" });
+      assert.equal(res.status, 401);
+    });
+
+    test("404 for a non-participant", async () => {
+      const conv = await createConversation(adminToken, staffUser.id);
+      const msg = await sendMessage(adminToken, conv.body.id, "original");
+      const res = await request(app)
+        .patch(`/api/chat/conversations/${conv.body.id}/messages/${msg.body.id}`)
+        .set("Authorization", `Bearer ${otherToken}`)
+        .send({ body: "edited" });
+      assert.equal(res.status, 404);
+    });
+
+    test("403 when the caller is a participant but not the sender", async () => {
+      const conv = await createConversation(adminToken, staffUser.id);
+      const msg = await sendMessage(adminToken, conv.body.id, "original");
+      const res = await request(app)
+        .patch(`/api/chat/conversations/${conv.body.id}/messages/${msg.body.id}`)
+        .set("Authorization", `Bearer ${staffToken}`)
+        .send({ body: "edited by the wrong person" });
+      assert.equal(res.status, 403);
+    });
+
+    test("400 on empty body", async () => {
+      const conv = await createConversation(adminToken, staffUser.id);
+      const msg = await sendMessage(adminToken, conv.body.id, "original");
+      const res = await request(app)
+        .patch(`/api/chat/conversations/${conv.body.id}/messages/${msg.body.id}`)
+        .set("Authorization", `Bearer ${adminToken}`)
+        .send({ body: "   " });
+      assert.equal(res.status, 400);
+    });
+
+    test("edits the body, sets editedAt, and publishes a message-edited event to both participants", async () => {
+      const conv = await createConversation(adminToken, staffUser.id);
+      const msg = await sendMessage(adminToken, conv.body.id, "original");
+
+      const staffWaiter = waitForEvent(staffUser.id, "message-edited");
+      const adminWaiter = waitForEvent(adminUser.id, "message-edited");
+
+      const res = await request(app)
+        .patch(`/api/chat/conversations/${conv.body.id}/messages/${msg.body.id}`)
+        .set("Authorization", `Bearer ${adminToken}`)
+        .send({ body: "edited text" });
+      assert.equal(res.status, 200);
+      assert.equal(res.body.body, "edited text");
+      assert.ok(res.body.editedAt);
+
+      const staffPayload = await staffWaiter;
+      const adminPayload = await adminWaiter;
+      assert.equal(staffPayload.id, msg.body.id);
+      assert.equal(staffPayload.body, "edited text");
+      assert.equal(adminPayload.id, msg.body.id);
+
+      const dbMsg = await prisma.message.findUnique({ where: { id: msg.body.id } });
+      assert.equal(dbMsg.body, "edited text");
+      assert.ok(dbMsg.editedAt);
+    });
+
+    test("404 for a nonexistent message", async () => {
+      const conv = await createConversation(adminToken, staffUser.id);
+      const res = await request(app)
+        .patch(`/api/chat/conversations/${conv.body.id}/messages/999999`)
+        .set("Authorization", `Bearer ${adminToken}`)
+        .send({ body: "edited" });
+      assert.equal(res.status, 404);
+    });
+
+    test("404 when editing an already-deleted message", async () => {
+      const conv = await createConversation(adminToken, staffUser.id);
+      const msg = await sendMessage(adminToken, conv.body.id, "original");
+      await request(app)
+        .delete(`/api/chat/conversations/${conv.body.id}/messages/${msg.body.id}`)
+        .set("Authorization", `Bearer ${adminToken}`);
+
+      const res = await request(app)
+        .patch(`/api/chat/conversations/${conv.body.id}/messages/${msg.body.id}`)
+        .set("Authorization", `Bearer ${adminToken}`)
+        .send({ body: "edited" });
+      assert.equal(res.status, 404);
+    });
+  });
+
+  describe("DELETE /chat/conversations/:id/messages/:messageId", () => {
+    async function createConversation(token, userId) {
+      return request(app)
+        .post("/api/chat/conversations")
+        .set("Authorization", `Bearer ${token}`)
+        .send({ userId });
+    }
+
+    async function sendMessage(token, conversationId, body) {
+      return request(app)
+        .post(`/api/chat/conversations/${conversationId}/messages`)
+        .set("Authorization", `Bearer ${token}`)
+        .send({ body });
+    }
+
+    test("requires authentication", async () => {
+      const res = await request(app).delete("/api/chat/conversations/1/messages/1").send({});
+      assert.equal(res.status, 401);
+    });
+
+    test("404 for a non-participant", async () => {
+      const conv = await createConversation(adminToken, staffUser.id);
+      const msg = await sendMessage(adminToken, conv.body.id, "original");
+      const res = await request(app)
+        .delete(`/api/chat/conversations/${conv.body.id}/messages/${msg.body.id}`)
+        .set("Authorization", `Bearer ${otherToken}`)
+        .send({});
+      assert.equal(res.status, 404);
+    });
+
+    test("403 when the caller is a participant but not the sender", async () => {
+      const conv = await createConversation(adminToken, staffUser.id);
+      const msg = await sendMessage(adminToken, conv.body.id, "original");
+      const res = await request(app)
+        .delete(`/api/chat/conversations/${conv.body.id}/messages/${msg.body.id}`)
+        .set("Authorization", `Bearer ${staffToken}`)
+        .send({});
+      assert.equal(res.status, 403);
+    });
+
+    test("soft-deletes: clears body, sets deletedAt, and publishes message-deleted to both participants", async () => {
+      const conv = await createConversation(adminToken, staffUser.id);
+      const msg = await sendMessage(adminToken, conv.body.id, "secret content");
+
+      const staffWaiter = waitForEvent(staffUser.id, "message-deleted");
+      const adminWaiter = waitForEvent(adminUser.id, "message-deleted");
+
+      const res = await request(app)
+        .delete(`/api/chat/conversations/${conv.body.id}/messages/${msg.body.id}`)
+        .set("Authorization", `Bearer ${adminToken}`)
+        .send({});
+      assert.equal(res.status, 200);
+      assert.equal(res.body.id, msg.body.id);
+      assert.ok(res.body.deletedAt);
+
+      const staffPayload = await staffWaiter;
+      const adminPayload = await adminWaiter;
+      assert.equal(staffPayload.id, msg.body.id);
+      assert.equal(adminPayload.id, msg.body.id);
+
+      const dbMsg = await prisma.message.findUnique({ where: { id: msg.body.id } });
+      assert.equal(dbMsg.body, null, "content must be cleared, not just flagged");
+      assert.ok(dbMsg.deletedAt);
+    });
+
+    test("404 when deleting an already-deleted message", async () => {
+      const conv = await createConversation(adminToken, staffUser.id);
+      const msg = await sendMessage(adminToken, conv.body.id, "original");
+      await request(app)
+        .delete(`/api/chat/conversations/${conv.body.id}/messages/${msg.body.id}`)
+        .set("Authorization", `Bearer ${adminToken}`);
+
+      const res = await request(app)
+        .delete(`/api/chat/conversations/${conv.body.id}/messages/${msg.body.id}`)
+        .set("Authorization", `Bearer ${adminToken}`)
+        .send({});
+      assert.equal(res.status, 404);
+    });
+  });
+
+  describe("POST/DELETE /chat/conversations/:id/messages/:messageId/reactions", () => {
+    async function createConversation(token, userId) {
+      return request(app)
+        .post("/api/chat/conversations")
+        .set("Authorization", `Bearer ${token}`)
+        .send({ userId });
+    }
+
+    async function sendMessage(token, conversationId, body) {
+      return request(app)
+        .post(`/api/chat/conversations/${conversationId}/messages`)
+        .set("Authorization", `Bearer ${token}`)
+        .send({ body });
+    }
+
+    test("POST requires authentication", async () => {
+      const res = await request(app).post("/api/chat/conversations/1/messages/1/reactions").send({ emoji: "👍" });
+      assert.equal(res.status, 401);
+    });
+
+    test("POST 404 for a non-participant", async () => {
+      const conv = await createConversation(adminToken, staffUser.id);
+      const msg = await sendMessage(adminToken, conv.body.id, "hi");
+      const res = await request(app)
+        .post(`/api/chat/conversations/${conv.body.id}/messages/${msg.body.id}/reactions`)
+        .set("Authorization", `Bearer ${otherToken}`)
+        .send({ emoji: "👍" });
+      assert.equal(res.status, 404);
+    });
+
+    test("POST 400 on a missing or oversized emoji", async () => {
+      const conv = await createConversation(adminToken, staffUser.id);
+      const msg = await sendMessage(adminToken, conv.body.id, "hi");
+
+      const missing = await request(app)
+        .post(`/api/chat/conversations/${conv.body.id}/messages/${msg.body.id}/reactions`)
+        .set("Authorization", `Bearer ${adminToken}`)
+        .send({});
+      assert.equal(missing.status, 400);
+
+      const oversized = await request(app)
+        .post(`/api/chat/conversations/${conv.body.id}/messages/${msg.body.id}/reactions`)
+        .set("Authorization", `Bearer ${adminToken}`)
+        .send({ emoji: "x".repeat(9) });
+      assert.equal(oversized.status, 400);
+    });
+
+    test("either participant can react to either side's message; 201 then 200 on a repeat react", async () => {
+      const conv = await createConversation(adminToken, staffUser.id);
+      const msg = await sendMessage(adminToken, conv.body.id, "hi");
+
+      const staffWaiter = waitForEvent(staffUser.id, "reaction-added");
+      const adminWaiter = waitForEvent(adminUser.id, "reaction-added");
+
+      const first = await request(app)
+        .post(`/api/chat/conversations/${conv.body.id}/messages/${msg.body.id}/reactions`)
+        .set("Authorization", `Bearer ${staffToken}`)
+        .send({ emoji: "👍" });
+      assert.equal(first.status, 201);
+
+      const staffPayload = await staffWaiter;
+      const adminPayload = await adminWaiter;
+      assert.deepEqual(
+        { conversationId: staffPayload.conversationId, messageId: staffPayload.messageId, emoji: staffPayload.emoji, userId: staffPayload.userId },
+        { conversationId: conv.body.id, messageId: msg.body.id, emoji: "👍", userId: staffUser.id }
+      );
+      assert.deepEqual(adminPayload, staffPayload, "both participants get the same event, including the reactor");
+
+      // Repeat: idempotent, no re-publish, 200 not 201.
+      const noEventWaiter = waitForEvent(staffUser.id, "reaction-added", 200).catch((err) => err);
+      const second = await request(app)
+        .post(`/api/chat/conversations/${conv.body.id}/messages/${msg.body.id}/reactions`)
+        .set("Authorization", `Bearer ${staffToken}`)
+        .send({ emoji: "👍" });
+      assert.equal(second.status, 200);
+      assert.ok((await noEventWaiter) instanceof Error, "a repeat react must not re-publish");
+
+      const rows = await prisma.messageReaction.findMany({ where: { messageId: msg.body.id } });
+      assert.equal(rows.length, 1, "must not create a duplicate row");
+    });
+
+    test("two concurrent adds of the same reaction never 500 and never create a duplicate row", async () => {
+      const conv = await createConversation(adminToken, staffUser.id);
+      const msg = await sendMessage(adminToken, conv.body.id, "hi");
+
+      const [first, second] = await Promise.all([
+        request(app)
+          .post(`/api/chat/conversations/${conv.body.id}/messages/${msg.body.id}/reactions`)
+          .set("Authorization", `Bearer ${staffToken}`)
+          .send({ emoji: "👍" }),
+        request(app)
+          .post(`/api/chat/conversations/${conv.body.id}/messages/${msg.body.id}/reactions`)
+          .set("Authorization", `Bearer ${staffToken}`)
+          .send({ emoji: "👍" }),
+      ]);
+      assert.ok([200, 201].includes(first.status), `unexpected status ${first.status}`);
+      assert.ok([200, 201].includes(second.status), `unexpected status ${second.status}`);
+
+      const rows = await prisma.messageReaction.findMany({ where: { messageId: msg.body.id } });
+      assert.equal(rows.length, 1, "must not create a duplicate row");
+    });
+
+    test("DELETE 404 when the caller never reacted with that emoji", async () => {
+      const conv = await createConversation(adminToken, staffUser.id);
+      const msg = await sendMessage(adminToken, conv.body.id, "hi");
+      const res = await request(app)
+        .delete(`/api/chat/conversations/${conv.body.id}/messages/${msg.body.id}/reactions/👍`)
+        .set("Authorization", `Bearer ${adminToken}`);
+      assert.equal(res.status, 404);
+    });
+
+    test("DELETE removes only the caller's own reaction and publishes reaction-removed to both", async () => {
+      const conv = await createConversation(adminToken, staffUser.id);
+      const msg = await sendMessage(adminToken, conv.body.id, "hi");
+      await request(app)
+        .post(`/api/chat/conversations/${conv.body.id}/messages/${msg.body.id}/reactions`)
+        .set("Authorization", `Bearer ${staffToken}`)
+        .send({ emoji: "👍" });
+      await request(app)
+        .post(`/api/chat/conversations/${conv.body.id}/messages/${msg.body.id}/reactions`)
+        .set("Authorization", `Bearer ${adminToken}`)
+        .send({ emoji: "👍" });
+
+      const staffWaiter = waitForEvent(staffUser.id, "reaction-removed");
+      const adminWaiter = waitForEvent(adminUser.id, "reaction-removed");
+
+      const res = await request(app)
+        .delete(`/api/chat/conversations/${conv.body.id}/messages/${msg.body.id}/reactions/👍`)
+        .set("Authorization", `Bearer ${staffToken}`);
+      assert.equal(res.status, 200);
+
+      const staffPayload = await staffWaiter;
+      const adminPayload = await adminWaiter;
+      assert.equal(staffPayload.userId, staffUser.id);
+      assert.deepEqual(adminPayload, staffPayload);
+
+      const rows = await prisma.messageReaction.findMany({ where: { messageId: msg.body.id } });
+      assert.equal(rows.length, 1, "only staff's reaction must be gone");
+      assert.equal(rows[0].userId, adminUser.id);
+    });
+
+    test("GET messages includes a reactions summary with emoji/count/mine", async () => {
+      const conv = await createConversation(adminToken, staffUser.id);
+      const msg = await sendMessage(adminToken, conv.body.id, "hi");
+      await request(app)
+        .post(`/api/chat/conversations/${conv.body.id}/messages/${msg.body.id}/reactions`)
+        .set("Authorization", `Bearer ${staffToken}`)
+        .send({ emoji: "👍" });
+      await request(app)
+        .post(`/api/chat/conversations/${conv.body.id}/messages/${msg.body.id}/reactions`)
+        .set("Authorization", `Bearer ${adminToken}`)
+        .send({ emoji: "👍" });
+      await request(app)
+        .post(`/api/chat/conversations/${conv.body.id}/messages/${msg.body.id}/reactions`)
+        .set("Authorization", `Bearer ${adminToken}`)
+        .send({ emoji: "🔥" });
+
+      const asStaff = await request(app)
+        .get(`/api/chat/conversations/${conv.body.id}/messages`)
+        .set("Authorization", `Bearer ${staffToken}`);
+      const staffView = asStaff.body.data.find((m) => m.id === msg.body.id).reactions;
+      const thumbsUpStaff = staffView.find((r) => r.emoji === "👍");
+      assert.equal(thumbsUpStaff.count, 2);
+      assert.equal(thumbsUpStaff.mine, true);
+      const fireStaff = staffView.find((r) => r.emoji === "🔥");
+      assert.equal(fireStaff.count, 1);
+      assert.equal(fireStaff.mine, false);
+
+      const asAdmin = await request(app)
+        .get(`/api/chat/conversations/${conv.body.id}/messages`)
+        .set("Authorization", `Bearer ${adminToken}`);
+      const adminView = asAdmin.body.data.find((m) => m.id === msg.body.id).reactions;
+      assert.equal(adminView.find((r) => r.emoji === "🔥").mine, true);
+    });
+  });
+
   describe("POST /chat/conversations/:id/read", () => {
     async function createConversation(token, userId) {
       return request(app)
@@ -488,6 +980,150 @@ describe("Chat API", () => {
         .get("/api/chat/conversations")
         .set("Authorization", `Bearer ${staffToken}`);
       assert.equal(afterStaffList.body.find((c) => c.id === conv.body.id).unreadCount, 0);
+    });
+
+    test("publishes a read event to the other participant (the sender), not to the reader", async () => {
+      const conv = await createConversation(adminToken, staffUser.id);
+      await request(app)
+        .post(`/api/chat/conversations/${conv.body.id}/messages`)
+        .set("Authorization", `Bearer ${staffToken}`)
+        .send({ body: "msg 1" });
+
+      const staffWaiter = waitForEvent(staffUser.id, "read");
+      const adminWaiter = waitForEvent(adminUser.id, "read", 200).catch((err) => err);
+
+      const res = await request(app)
+        .post(`/api/chat/conversations/${conv.body.id}/read`)
+        .set("Authorization", `Bearer ${adminToken}`)
+        .send({});
+      assert.equal(res.status, 200);
+
+      const staffPayload = await staffWaiter;
+      assert.equal(staffPayload.conversationId, conv.body.id);
+      assert.equal(staffPayload.readerId, adminUser.id);
+      // chatBus carries the raw Date object (in-process, pre-serialization);
+      // the HTTP response has already gone through JSON.stringify. Compare
+      // as ISO strings, which is also what a real SSE client receives.
+      assert.equal(staffPayload.lastReadAt.toISOString(), res.body.lastReadAt);
+
+      assert.ok((await adminWaiter) instanceof Error, "the reader must not receive their own read event");
+    });
+  });
+
+  describe("POST /chat/conversations/:id/mute and /unmute", () => {
+    async function createConversation(token, userId) {
+      return request(app)
+        .post("/api/chat/conversations")
+        .set("Authorization", `Bearer ${token}`)
+        .send({ userId });
+    }
+
+    test("requires authentication", async () => {
+      const res = await request(app).post("/api/chat/conversations/1/mute").send({});
+      assert.equal(res.status, 401);
+    });
+
+    test("404 for a non-participant", async () => {
+      const conv = await createConversation(adminToken, staffUser.id);
+      const res = await request(app)
+        .post(`/api/chat/conversations/${conv.body.id}/mute`)
+        .set("Authorization", `Bearer ${otherToken}`)
+        .send({});
+      assert.equal(res.status, 404);
+    });
+
+    test("mutes only the caller's own side, reflected on GET /conversations, and unmute reverses it", async () => {
+      const conv = await createConversation(adminToken, staffUser.id);
+
+      const muteRes = await request(app)
+        .post(`/api/chat/conversations/${conv.body.id}/mute`)
+        .set("Authorization", `Bearer ${adminToken}`)
+        .send({});
+      assert.equal(muteRes.status, 200);
+      assert.deepEqual(muteRes.body, { conversationId: conv.body.id, muted: true });
+
+      const adminList = await request(app)
+        .get("/api/chat/conversations")
+        .set("Authorization", `Bearer ${adminToken}`);
+      assert.equal(adminList.body.find((c) => c.id === conv.body.id).muted, true);
+
+      // The other participant's own view is untouched — muting is per-side.
+      const staffList = await request(app)
+        .get("/api/chat/conversations")
+        .set("Authorization", `Bearer ${staffToken}`);
+      assert.equal(staffList.body.find((c) => c.id === conv.body.id).muted, false);
+
+      const unmuteRes = await request(app)
+        .post(`/api/chat/conversations/${conv.body.id}/unmute`)
+        .set("Authorization", `Bearer ${adminToken}`)
+        .send({});
+      assert.equal(unmuteRes.status, 200);
+      assert.deepEqual(unmuteRes.body, { conversationId: conv.body.id, muted: false });
+
+      const afterList = await request(app)
+        .get("/api/chat/conversations")
+        .set("Authorization", `Bearer ${adminToken}`);
+      assert.equal(afterList.body.find((c) => c.id === conv.body.id).muted, false);
+    });
+
+    test("muting doesn't affect the live SSE message event, only the push-notification path", async () => {
+      const conv = await createConversation(adminToken, staffUser.id);
+      await request(app)
+        .post(`/api/chat/conversations/${conv.body.id}/mute`)
+        .set("Authorization", `Bearer ${adminToken}`)
+        .send({});
+
+      const adminWaiter = waitForEvent(adminUser.id, "message");
+      const res = await request(app)
+        .post(`/api/chat/conversations/${conv.body.id}/messages`)
+        .set("Authorization", `Bearer ${staffToken}`)
+        .send({ body: "hi despite mute" });
+      assert.equal(res.status, 201);
+
+      const payload = await adminWaiter;
+      assert.equal(payload.body, "hi despite mute");
+    });
+  });
+
+  describe("POST /chat/conversations/:id/typing", () => {
+    async function createConversation(token, userId) {
+      return request(app)
+        .post("/api/chat/conversations")
+        .set("Authorization", `Bearer ${token}`)
+        .send({ userId });
+    }
+
+    test("requires authentication", async () => {
+      const res = await request(app).post("/api/chat/conversations/1/typing").send({});
+      assert.equal(res.status, 401);
+    });
+
+    test("404 for a non-participant", async () => {
+      const conv = await createConversation(adminToken, staffUser.id);
+      const res = await request(app)
+        .post(`/api/chat/conversations/${conv.body.id}/typing`)
+        .set("Authorization", `Bearer ${otherToken}`)
+        .send({});
+      assert.equal(res.status, 404);
+    });
+
+    test("publishes a typing event to the other participant, not the caller", async () => {
+      const conv = await createConversation(adminToken, staffUser.id);
+
+      const staffWaiter = waitForEvent(staffUser.id, "typing");
+      const adminWaiter = waitForEvent(adminUser.id, "typing", 200).catch((err) => err);
+
+      const res = await request(app)
+        .post(`/api/chat/conversations/${conv.body.id}/typing`)
+        .set("Authorization", `Bearer ${adminToken}`)
+        .send({});
+      assert.equal(res.status, 204);
+
+      const payload = await staffWaiter;
+      assert.equal(payload.conversationId, conv.body.id);
+      assert.equal(payload.userId, adminUser.id);
+
+      assert.ok((await adminWaiter) instanceof Error, "the caller must not receive their own typing event");
     });
   });
 
@@ -593,6 +1229,40 @@ describe("Chat API", () => {
         .set("Authorization", `Bearer ${messengerToken}`);
       assert.equal(res.status, 409);
       assert.deepEqual(res.body, { error: "Cannot delete an account with sent messages" });
+    });
+
+    test("409s with a friendship-specific error for a caller who is friends but has no conversation or message", async () => {
+      // Two accounts can accept a friend request without ever opening a
+      // chat — the Friendship row's FK would otherwise surface as the
+      // generic "chat conversations" P2003 fallback, which is the wrong
+      // reason. See src/routes/users.js's explicit hasFriendships check.
+      const social = await createUser({ email: "social@test.com", password: "pass12345" });
+      const socialToken = await login("social@test.com", "pass12345");
+      await makeFriends(social, staffUser);
+
+      const res = await request(app).delete("/api/users/me").set("Authorization", `Bearer ${socialToken}`);
+      assert.equal(res.status, 409);
+      assert.deepEqual(res.body, { error: "Cannot delete an account with friend connections or pending requests" });
+
+      const stillThere = await prisma.user.findUnique({ where: { id: social.id } });
+      assert.ok(stillThere, "user must not have been deleted");
+    });
+
+    test("deletes cleanly for a caller with no chat/friend data but a registered push subscription", async () => {
+      // A push subscription is this account's own device registration, not
+      // shared with anyone else — deletion should clear it rather than
+      // 409ing on it (see src/routes/users.js's pushSubscription.deleteMany).
+      const pushy = await createUser({ email: "pushy@test.com", password: "pass12345" });
+      const pushyToken = await login("pushy@test.com", "pass12345");
+      await prisma.pushSubscription.create({
+        data: { userId: pushy.id, endpoint: "https://push.example/pushy", p256dh: "key", authKey: "auth" },
+      });
+
+      const res = await request(app).delete("/api/users/me").set("Authorization", `Bearer ${pushyToken}`);
+      assert.equal(res.status, 204);
+
+      const stillThere = await prisma.user.findUnique({ where: { id: pushy.id } });
+      assert.equal(stillThere, null);
     });
 
     test("does not 500 (falls through to a clean delete) for a caller with no chat data", async () => {

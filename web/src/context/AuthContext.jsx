@@ -50,14 +50,17 @@ export function AuthProvider({ children }) {
     }
   }, [token])
 
-  async function login(email, password) {
-    const data = await apiFetch('/auth/login', { method: 'POST', body: { email, password } })
+  async function login(identifier, password) {
+    const data = await apiFetch('/auth/login', { method: 'POST', body: { identifier, password } })
     setToken(data.token)
     setUser(data.user)
   }
 
-  async function signup(email, password, name) {
-    const data = await apiFetch('/auth/signup', { method: 'POST', body: { email, password, name } })
+  async function signup(email, password, name, captchaToken) {
+    const data = await apiFetch('/auth/signup', {
+      method: 'POST',
+      body: { email, password, name, captchaToken },
+    })
     setToken(data.token)
     setUser(data.user)
   }
@@ -76,8 +79,16 @@ export function AuthProvider({ children }) {
     setUser(null)
   }
 
+  // For a caller that just changed something about the account server-side
+  // (e.g. AccountPage after PATCH /users/me) and has the new field values in
+  // hand already — merges rather than refetching, since a full /auth/me
+  // round-trip for one changed field is unnecessary.
+  function updateUser(partial) {
+    setUser((prev) => (prev ? { ...prev, ...partial } : prev))
+  }
+
   return (
-    <AuthContext.Provider value={{ token, user, login, signup, loginWithGoogleTicket, logout }}>
+    <AuthContext.Provider value={{ token, user, login, signup, loginWithGoogleTicket, logout, updateUser }}>
       {children}
     </AuthContext.Provider>
   )

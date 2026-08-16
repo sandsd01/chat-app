@@ -4,20 +4,27 @@ import { useAuth } from '../context/AuthContext'
 import { useLanguage } from '../context/LanguageContext'
 import { useChat } from '../context/ChatContext'
 import { useFriends } from '../context/FriendsContext'
-import { listMessages, listDriveHistory, sendMessage } from '../api/chat'
+import {
+  listMessages,
+  listDriveHistory,
+  sendMessage,
+  requestUpload,
+  uploadFileToR2,
+  sendTyping,
+  editMessage,
+  deleteMessage,
+  searchMessages,
+  addReaction,
+  removeReaction,
+} from '../api/chat'
 import { useDriveBackup } from '../hooks/useDriveBackup'
+import { EmojiPicker } from '../components/EmojiPicker'
+import { initials, localeFor, CLEARED_ATTACHMENT_FIELDS } from '../lib/format'
+import { useDocumentTitle } from '../hooks/useDocumentTitle'
 
 const MESSAGE_PAGE_SIZE = 50
 const SCROLL_BOTTOM_THRESHOLD = 80
 const SCROLL_TOP_LOAD_THRESHOLD = 60
-
-function initials(nameOrEmail) {
-  const source = (nameOrEmail || '').trim()
-  if (!source) return '?'
-  const parts = source.split(/\s+/).filter(Boolean)
-  if (parts.length >= 2) return (parts[0][0] + parts[1][0]).toUpperCase()
-  return source.slice(0, 2).toUpperCase()
-}
 
 function isSameDay(a, b) {
   return a.toDateString() === b.toDateString()
@@ -30,25 +37,18 @@ function formatDayLabel(dateStr, t, language) {
   yesterday.setDate(today.getDate() - 1)
   if (isSameDay(d, today)) return t('chat.today')
   if (isSameDay(d, yesterday)) return t('chat.yesterday')
-  return d.toLocaleDateString(language === 'th' ? 'th-TH' : 'en-US', {
-    day: 'numeric',
-    month: 'short',
-    year: 'numeric',
-  })
+  return d.toLocaleDateString(localeFor(language), { day: 'numeric', month: 'short', year: 'numeric' })
 }
 
 function formatTime(dateStr, language) {
-  return new Date(dateStr).toLocaleTimeString(language === 'th' ? 'th-TH' : 'en-US', {
-    hour: '2-digit',
-    minute: '2-digit',
-  })
+  return new Date(dateStr).toLocaleTimeString(localeFor(language), { hour: '2-digit', minute: '2-digit' })
 }
 
 function formatListTimestamp(dateStr, language) {
   const d = new Date(dateStr)
   const today = new Date()
   if (isSameDay(d, today)) return formatTime(dateStr, language)
-  return d.toLocaleDateString(language === 'th' ? 'th-TH' : 'en-US', { day: 'numeric', month: 'short' })
+  return d.toLocaleDateString(localeFor(language), { day: 'numeric', month: 'short' })
 }
 
 export function ChatPage() {
@@ -62,7 +62,13 @@ export function ChatPage() {
     error: conversationsError,
     connectionState,
     subscribeToConversation,
+    subscribeToTyping,
+    subscribeToMessageEdited,
+    subscribeToMessageDeleted,
+    subscribeToReactionAdded,
+    subscribeToReactionRemoved,
     markConversationRead,
+    setConversationMuted,
     startChat,
   } = useChat()
   const { friends } = useFriends()
@@ -142,10 +148,67 @@ export function ChatPage() {
   // way (see the load effect below).
   const [driveHasMore, setDriveHasMore] = useState(false)
   const [loadingOlder, setLoadingOlder] = useState(false)
+  // Announced through a visually-hidden live region below — loadOlder()
+  // prepends messages above the current scroll position with no visible
+  // change a screen-reader user would otherwise notice.
+  const [olderLoadAnnouncement, setOlderLoadAnnouncement] = useState('')
   const [draft, setDraft] = useState('')
+  const [editingMessageId, setEditingMessageId] = useState(null)
+  const [editingDraft, setEditingDraft] = useState('')
+  const [emojiPickerOpen, setEmojiPickerOpen] = useState(false)
+  const [reactionPickerMessageId, setReactionPickerMessageId] = useState(null)
+  const [uploadBusy, setUploadBusy] = useState(false)
+  const [uploadError, setUploadError] = useState(null)
+  const fileInputRef = useRef(null)
 
   const messagesElRef = useRef(null)
   const isAtBottomRef = useRef(true)
+
+  // -- In-thread search -------------------------------------------------------
+  // A separate result list rather than trying to scroll/highlight a match
+  // inside the already-loaded thread: older matches may not be loaded (or
+  // may only exist in Drive) at all, so "jump to it in place" isn't always
+  // possible. Debounced, and scoped to whichever conversation is open.
+  const [searchOpen, setSearchOpen] = useState(false)
+  const [searchQuery, setSearchQuery] = useState('')
+  const [searchResults, setSearchResults] = useState(null)
+  const [searchLoading, setSearchLoading] = useState(false)
+  const [searchError, setSearchError] = useState(null)
+  const SEARCH_DEBOUNCE_MS = 300
+
+  useEffect(() => {
+    setSearchOpen(false)
+    setSearchQuery('')
+    setSearchResults(null)
+    setSearchError(null)
+  }, [activeConversationId])
+
+  useEffect(() => {
+    const q = searchQuery.trim()
+    if (!searchOpen || !q) {
+      setSearchResults(null)
+      setSearchError(null)
+      return undefined
+    }
+    setSearchLoading(true)
+    const timer = setTimeout(() => {
+      searchMessages(activeConversationId, { q, limit: 50 }, token)
+        .then((res) => setSearchResults(res.data))
+        .catch((err) => setSearchError(err.message))
+        .finally(() => setSearchLoading(false))
+    }, SEARCH_DEBOUNCE_MS)
+    return () => clearTimeout(timer)
+  }, [searchOpen, searchQuery, activeConversationId, token])
+
+  // -- Typing indicator ------------------------------------------------------
+  // Transient presence only: no history, no persistence. "Other is typing"
+  // clears itself on a timeout rather than waiting for a "stopped typing"
+  // event, since the backend doesn't publish one (see src/routes/chat.js).
+  const [otherTyping, setOtherTyping] = useState(false)
+  const typingClearTimerRef = useRef(null)
+  const lastTypingSentAtRef = useRef(0)
+  const TYPING_CLEAR_MS = 3000
+  const TYPING_SEND_THROTTLE_MS = 2000
 
   const scrollToBottom = useCallback(() => {
     const el = messagesElRef.current
@@ -219,6 +282,153 @@ export function ChatPage() {
     })
   }, [activeConversationId, subscribeToConversation, markConversationRead, user.id, scrollToBottom])
 
+  // Reset when switching threads so a stale indicator from the previous
+  // conversation can't linger, then re-subscribe for the newly active one.
+  useEffect(() => {
+    setOtherTyping(false)
+    setEditingMessageId(null)
+    setEditingDraft('')
+    setReactionPickerMessageId(null)
+    clearTimeout(typingClearTimerRef.current)
+    if (!activeConversationId) return undefined
+    return subscribeToTyping(activeConversationId, () => {
+      setOtherTyping(true)
+      clearTimeout(typingClearTimerRef.current)
+      typingClearTimerRef.current = setTimeout(() => setOtherTyping(false), TYPING_CLEAR_MS)
+    })
+  }, [activeConversationId, subscribeToTyping])
+
+  useEffect(() => {
+    if (!activeConversationId) return undefined
+    return subscribeToMessageEdited(activeConversationId, (payload) => {
+      setMessages((prev) =>
+        prev.map((m) => (m.id === payload.id ? { ...m, body: payload.body, editedAt: payload.editedAt } : m))
+      )
+    })
+  }, [activeConversationId, subscribeToMessageEdited])
+
+  useEffect(() => {
+    if (!activeConversationId) return undefined
+    return subscribeToMessageDeleted(activeConversationId, (payload) => {
+      setMessages((prev) =>
+        prev.map((m) =>
+          m.id === payload.id
+            ? {
+                ...m,
+                deletedAt: payload.deletedAt,
+                ...CLEARED_ATTACHMENT_FIELDS,
+              }
+            : m
+        )
+      )
+    })
+  }, [activeConversationId, subscribeToMessageDeleted])
+
+  // Both the reactor and the other participant get the same "reaction-added"/
+  // "reaction-removed" event (see src/routes/chat.js), so the UI is purely
+  // event-driven here rather than also patching state from the POST/DELETE
+  // response — one source of truth avoids double-applying the same reaction.
+  useEffect(() => {
+    if (!activeConversationId) return undefined
+    return subscribeToReactionAdded(activeConversationId, (payload) => {
+      setMessages((prev) =>
+        prev.map((m) => {
+          if (m.id !== payload.messageId) return m
+          const reactions = m.reactions ? [...m.reactions] : []
+          const idx = reactions.findIndex((r) => r.emoji === payload.emoji)
+          if (idx === -1) {
+            reactions.push({ emoji: payload.emoji, count: 1, mine: payload.userId === user.id })
+          } else {
+            reactions[idx] = {
+              ...reactions[idx],
+              count: reactions[idx].count + 1,
+              mine: reactions[idx].mine || payload.userId === user.id,
+            }
+          }
+          return { ...m, reactions }
+        })
+      )
+    })
+  }, [activeConversationId, subscribeToReactionAdded, user.id])
+
+  useEffect(() => {
+    if (!activeConversationId) return undefined
+    return subscribeToReactionRemoved(activeConversationId, (payload) => {
+      setMessages((prev) =>
+        prev.map((m) => {
+          if (m.id !== payload.messageId || !m.reactions) return m
+          const reactions = m.reactions
+            .map((r) =>
+              r.emoji === payload.emoji
+                ? { ...r, count: r.count - 1, mine: payload.userId === user.id ? false : r.mine }
+                : r
+            )
+            .filter((r) => r.count > 0)
+          return { ...m, reactions }
+        })
+      )
+    })
+  }, [activeConversationId, subscribeToReactionRemoved, user.id])
+
+  function toggleReaction(message, emoji) {
+    const alreadyMine = message.reactions?.find((r) => r.emoji === emoji)?.mine
+    const action = alreadyMine ? removeReaction : addReaction
+    action(activeConversationId, message.id, emoji, token).catch((err) => setMessagesError(err.message))
+  }
+
+  function startEdit(message) {
+    setEditingMessageId(message.id)
+    setEditingDraft(message.body || '')
+  }
+
+  function cancelEdit() {
+    setEditingMessageId(null)
+    setEditingDraft('')
+  }
+
+  async function saveEdit(messageId) {
+    const body = editingDraft.trim()
+    if (!body) return
+    try {
+      const updated = await editMessage(activeConversationId, messageId, body, token)
+      setMessages((prev) => prev.map((m) => (m.id === messageId ? { ...m, ...updated } : m)))
+      cancelEdit()
+    } catch (err) {
+      setMessagesError(err.message)
+    }
+  }
+
+  async function handleDelete(messageId) {
+    if (!window.confirm(t('chat.confirmDeleteMessage'))) return
+    try {
+      const updated = await deleteMessage(activeConversationId, messageId, token)
+      setMessages((prev) =>
+        prev.map((m) =>
+          m.id === messageId
+            ? {
+                ...m,
+                ...updated,
+                ...CLEARED_ATTACHMENT_FIELDS,
+              }
+            : m
+        )
+      )
+    } catch (err) {
+      setMessagesError(err.message)
+    }
+  }
+
+  function notifyTyping() {
+    if (!activeConversationId) return
+    const now = Date.now()
+    if (now - lastTypingSentAtRef.current < TYPING_SEND_THROTTLE_MS) return
+    lastTypingSentAtRef.current = now
+    sendTyping(activeConversationId, token).catch(() => {
+      // Best-effort presence signal — a failed send just means the other
+      // side doesn't see "typing…" this time, nothing to recover from.
+    })
+  }
+
   // Postgres first, then — once it's exhausted — this account's own Drive
   // archive for this conversation, using the oldest message currently on
   // screen as the cursor either way. Both sources return the same
@@ -244,6 +454,7 @@ export function ChatPage() {
         setHasMore(res.hasMore)
         setNextBefore(res.nextBefore)
       }
+      setOlderLoadAnnouncement(t('chat.olderMessagesLoaded', { count: res.data.length }))
       requestAnimationFrame(() => {
         if (el) el.scrollTop = el.scrollHeight - prevScrollHeight
       })
@@ -266,7 +477,7 @@ export function ChatPage() {
 
   async function attemptSend(conversationId, body, tempId) {
     try {
-      const real = await sendMessage(conversationId, body, token)
+      const real = await sendMessage(conversationId, { body }, token)
       setMessages((prev) => {
         if (prev.some((m) => m.id === real.id)) return prev.filter((m) => m.id !== tempId)
         return prev.map((m) => (m.id === tempId ? real : m))
@@ -296,6 +507,31 @@ export function ChatPage() {
     attemptSend(activeConversationId, body, tempId)
   }
 
+  async function handleFileSelected(e) {
+    const file = e.target.files?.[0]
+    e.target.value = '' // allow re-selecting the same file later
+    if (!file || !activeConversationId) return
+
+    setUploadError(null)
+    setUploadBusy(true)
+    try {
+      const { url, key } = await requestUpload(
+        activeConversationId,
+        { fileName: file.name, mimeType: file.type || 'application/octet-stream', size: file.size },
+        token
+      )
+      await uploadFileToR2(url, file)
+      const real = await sendMessage(activeConversationId, { attachmentKey: key, attachmentName: file.name }, token)
+      setMessages((prev) => [...prev, real])
+      isAtBottomRef.current = true
+      requestAnimationFrame(scrollToBottom)
+    } catch (err) {
+      setUploadError(err.message)
+    } finally {
+      setUploadBusy(false)
+    }
+  }
+
   function handleRetry(tempId) {
     const msg = messages.find((m) => m.id === tempId)
     if (!msg) return
@@ -306,6 +542,18 @@ export function ChatPage() {
   const threadHeaderName = activeConversation
     ? activeConversation.otherUser.name || activeConversation.otherUser.email
     : t('common.loading')
+  useDocumentTitle(activeConversation ? threadHeaderName : t('nav.chat'))
+
+  // Only the caller's most recent (sent, non-failed) message gets a "Read"
+  // tick — matching how WhatsApp/Telegram/etc. show it once per thread
+  // rather than on every message the other side has read.
+  const lastMineMessageId = useMemo(() => {
+    for (let i = messages.length - 1; i >= 0; i--) {
+      if (messages[i].senderId === user.id && !messages[i].pending && !messages[i].failed) return messages[i].id
+    }
+    return null
+  }, [messages, user.id])
+  const otherLastReadAt = activeConversation?.otherLastReadAt ? new Date(activeConversation.otherLastReadAt) : null
 
   let lastDayKey = null
 
@@ -320,14 +568,15 @@ export function ChatPage() {
               type="search"
               className="search-input"
               placeholder={t('chat.searchPlaceholder')}
+              aria-label={t('chat.searchPlaceholder')}
               value={query}
               onChange={(e) => setQuery(e.target.value)}
             />
           </div>
 
           <div className="chat-list-scroll">
-            {conversationsError && <p className="error">{t('chat.loadError')}</p>}
-            {startError && <p className="error">{startError}</p>}
+            {conversationsError && <p className="error" role="alert">{t('chat.loadError')}</p>}
+            {startError && <p className="error" role="alert">{startError}</p>}
 
             {showFriendsSection && (
               <>
@@ -354,10 +603,10 @@ export function ChatPage() {
             )}
 
             {conversationsLoading && conversations.length === 0 ? (
-              <p className="hint">{t('common.loading')}</p>
+              <p className="loading-note">{t('common.loading')}</p>
             ) : filteredConversations.length === 0 ? (
               trimmedQuery ? (
-                showNoMatches && <p className="hint">{t('chat.noResults')}</p>
+                showNoMatches && <p className="empty-state">{t('chat.noResults')}</p>
               ) : (
                 <div className="chat-empty">
                   <strong>{t('chat.noConversationsTitle')}</strong>
@@ -420,10 +669,49 @@ export function ChatPage() {
                 </button>
                 <span className="chat-avatar sm">{initials(threadHeaderName)}</span>
                 <span className="chat-thread-header-name">{threadHeaderName}</span>
+                <span className="chat-thread-header-spacer" />
+                {activeConversation && (
+                  <button
+                    type="button"
+                    className="chat-thread-mute-btn"
+                    aria-label={t(activeConversation.muted ? 'chat.unmute' : 'chat.mute')}
+                    aria-pressed={activeConversation.muted}
+                    onClick={() => setConversationMuted(activeConversation.id, !activeConversation.muted)}
+                  >
+                    {activeConversation.muted ? '🔕' : '🔔'}
+                  </button>
+                )}
+                <button
+                  type="button"
+                  className="chat-thread-search-btn"
+                  aria-label={t('chat.searchInConversation')}
+                  aria-pressed={searchOpen}
+                  onClick={() => setSearchOpen((open) => !open)}
+                >
+                  🔍
+                </button>
               </div>
 
+              {searchOpen && (
+                <div className="chat-search-bar">
+                  <input
+                    type="search"
+                    className="search-input"
+                    autoFocus
+                    placeholder={t('chat.searchInConversationPlaceholder')}
+                    aria-label={t('chat.searchInConversationPlaceholder')}
+                    value={searchQuery}
+                    onChange={(e) => setSearchQuery(e.target.value)}
+                  />
+                </div>
+              )}
+
               {(connectionState === 'reconnecting' || connectionState === 'down') && (
-                <div className={`chat-stream-banner${connectionState === 'down' ? ' down' : ''}`}>
+                <div
+                  className={`chat-stream-banner${connectionState === 'down' ? ' down' : ''}`}
+                  role="status"
+                  aria-live={connectionState === 'down' ? 'assertive' : 'polite'}
+                >
                   <span>{connectionState === 'down' ? t('chat.disconnected') : t('chat.reconnecting')}</span>
                   {connectionState === 'down' && (
                     <button type="button" onClick={() => window.location.reload()}>
@@ -433,8 +721,33 @@ export function ChatPage() {
                 </div>
               )}
 
+              <div role="status" aria-live="polite" className="sr-only">
+                {olderLoadAnnouncement}
+              </div>
               <div className="chat-messages" ref={messagesElRef} onScroll={handleScroll}>
-                {messagesError && <p className="error">{messagesError}</p>}
+                {searchOpen && searchQuery.trim() ? (
+                  <div>
+                    {searchError && <p className="error" role="alert">{searchError}</p>}
+                    {searchLoading ? (
+                      <p className="loading-note">{t('common.loading')}</p>
+                    ) : searchResults && searchResults.length === 0 ? (
+                      <p className="empty-state">{t('chat.noResults')}</p>
+                    ) : (
+                      searchResults?.map((m) => (
+                        <div key={m.id} className="chat-search-result-row">
+                          <span className="chat-search-result-meta">
+                            {(m.senderId === user.id ? t('chat.you') : threadHeaderName) +
+                              ' · ' +
+                              formatListTimestamp(m.createdAt, language)}
+                          </span>
+                          <span className="chat-search-result-body">{m.body}</span>
+                        </div>
+                      ))
+                    )}
+                  </div>
+                ) : (
+                  <>
+                {messagesError && <p className="error" role="alert">{messagesError}</p>}
                 {(hasMore || driveHasMore) && (
                   <button type="button" className="chat-load-more" onClick={loadOlder} disabled={loadingOlder}>
                     {loadingOlder
@@ -443,7 +756,7 @@ export function ChatPage() {
                   </button>
                 )}
                 {messagesLoading ? (
-                  <p className="hint">{t('chat.loadingMessages')}</p>
+                  <p className="loading-note">{t('chat.loadingMessages')}</p>
                 ) : (
                   messages.map((m) => {
                     const dayKey = new Date(m.createdAt).toDateString()
@@ -459,10 +772,128 @@ export function ChatPage() {
                         )}
                         <div className={`chat-bubble-row ${mine ? 'mine' : 'theirs'}${m.failed ? ' failed' : ''}`}>
                           <div className="chat-bubble-wrap">
-                            <div className="chat-bubble">
-                              {m.body}
-                              <span className="chat-bubble-time">{formatTime(m.createdAt, language)}</span>
-                            </div>
+                            {m.deletedAt ? (
+                              <div className="chat-bubble deleted">
+                                <span>{t('chat.messageDeleted')}</span>
+                              </div>
+                            ) : editingMessageId === m.id ? (
+                              <div className="chat-bubble-edit">
+                                <input
+                                  type="text"
+                                  value={editingDraft}
+                                  onChange={(e) => setEditingDraft(e.target.value)}
+                                  maxLength={4000}
+                                  autoFocus
+                                  aria-label={t('chat.editMessage')}
+                                />
+                                <div className="chat-bubble-edit-actions">
+                                  <button type="button" onClick={() => saveEdit(m.id)} disabled={!editingDraft.trim()}>
+                                    {t('chat.save')}
+                                  </button>
+                                  <button type="button" onClick={cancelEdit}>
+                                    {t('chat.cancel')}
+                                  </button>
+                                </div>
+                              </div>
+                            ) : (
+                              <div className="chat-bubble">
+                                {m.attachmentType === 'image' && (
+                                  <a href={m.attachmentUrl} target="_blank" rel="noreferrer" className="chat-attachment-image-link">
+                                    <img src={m.attachmentUrl} alt={m.attachmentName || ''} className="chat-attachment-image" />
+                                  </a>
+                                )}
+                                {m.attachmentType === 'file' && (
+                                  <a
+                                    href={m.attachmentUrl}
+                                    download={m.attachmentName}
+                                    target="_blank"
+                                    rel="noreferrer"
+                                    className="chat-attachment-file"
+                                  >
+                                    <span className="chat-attachment-file-icon">📄</span>
+                                    <span className="chat-attachment-file-info">
+                                      <span className="chat-attachment-file-name">{m.attachmentName}</span>
+                                      <span className="chat-attachment-file-size">
+                                        {m.attachmentSize ? `${Math.round(m.attachmentSize / 1024)} KB` : ''}
+                                      </span>
+                                    </span>
+                                  </a>
+                                )}
+                                {m.body}
+                                {m.editedAt && <span className="chat-bubble-edited-tag"> {t('chat.edited')}</span>}
+                                <span className="chat-bubble-time">
+                                  {formatTime(m.createdAt, language)}
+                                  {mine &&
+                                    m.id === lastMineMessageId &&
+                                    otherLastReadAt &&
+                                    otherLastReadAt >= new Date(m.createdAt) && (
+                                      <span className="chat-bubble-read-tag"> · {t('chat.read')}</span>
+                                    )}
+                                </span>
+                              </div>
+                            )}
+                            {!m.deletedAt && m.reactions?.length > 0 && (
+                              <div className={`chat-bubble-reactions ${mine ? 'mine' : 'theirs'}`}>
+                                {m.reactions.map((r) => (
+                                  <button
+                                    key={r.emoji}
+                                    type="button"
+                                    className={`chat-reaction-pill${r.mine ? ' mine' : ''}`}
+                                    aria-pressed={r.mine}
+                                    aria-label={t('chat.reactionPillLabel', { emoji: r.emoji, count: r.count })}
+                                    onClick={() => toggleReaction(m, r.emoji)}
+                                  >
+                                    <span aria-hidden="true">{r.emoji}</span> {r.count}
+                                  </button>
+                                ))}
+                              </div>
+                            )}
+                            {!m.pending && !m.failed && !m.deletedAt && editingMessageId !== m.id && (
+                              <div className="chat-bubble-actions">
+                                <span className="chat-bubble-reaction-trigger-wrap">
+                                  <button
+                                    type="button"
+                                    className="chat-bubble-action-btn"
+                                    aria-label={t('chat.addReaction')}
+                                    aria-expanded={reactionPickerMessageId === m.id}
+                                    onClick={() =>
+                                      setReactionPickerMessageId((id) => (id === m.id ? null : m.id))
+                                    }
+                                  >
+                                    😊
+                                  </button>
+                                  {reactionPickerMessageId === m.id && (
+                                    <EmojiPicker
+                                      onSelect={(emoji) => {
+                                        setReactionPickerMessageId(null)
+                                        toggleReaction(m, emoji)
+                                      }}
+                                      onClose={() => setReactionPickerMessageId(null)}
+                                    />
+                                  )}
+                                </span>
+                                {mine && (
+                                  <>
+                                    <button
+                                      type="button"
+                                      className="chat-bubble-action-btn"
+                                      aria-label={t('chat.editMessage')}
+                                      onClick={() => startEdit(m)}
+                                    >
+                                      ✏️
+                                    </button>
+                                    <button
+                                      type="button"
+                                      className="chat-bubble-action-btn"
+                                      aria-label={t('chat.deleteMessage')}
+                                      onClick={() => handleDelete(m.id)}
+                                    >
+                                      🗑️
+                                    </button>
+                                  </>
+                                )}
+                              </div>
+                            )}
                             {m.failed && (
                               <div className="chat-bubble-error">
                                 <span>{t('chat.messageFailed')}</span>
@@ -481,14 +912,58 @@ export function ChatPage() {
                     )
                   })
                 )}
+                  </>
+                )}
               </div>
 
+              <div className="chat-typing-indicator" aria-live="polite">
+                {otherTyping && t('chat.typingIndicator', { name: threadHeaderName })}
+              </div>
+
+              {uploadError && <p className="error" role="alert">{uploadError}</p>}
               <form className="chat-composer" onSubmit={handleSend}>
+                <div className="chat-composer-emoji-wrap">
+                  <button
+                    type="button"
+                    className="chat-composer-emoji-btn"
+                    aria-label={t('chat.emojiPicker')}
+                    aria-expanded={emojiPickerOpen}
+                    onClick={() => setEmojiPickerOpen((open) => !open)}
+                  >
+                    😊
+                  </button>
+                  {emojiPickerOpen && (
+                    <EmojiPicker
+                      onSelect={(emoji) => setDraft((prev) => prev + emoji)}
+                      onClose={() => setEmojiPickerOpen(false)}
+                    />
+                  )}
+                </div>
+                <input
+                  type="file"
+                  ref={fileInputRef}
+                  className="chat-composer-file-input"
+                  onChange={handleFileSelected}
+                  disabled={uploadBusy}
+                />
+                <button
+                  type="button"
+                  className="chat-composer-attach-btn"
+                  aria-label={uploadBusy ? t('common.loading') : t('chat.attachFile')}
+                  disabled={uploadBusy}
+                  onClick={() => fileInputRef.current?.click()}
+                >
+                  <span aria-hidden="true">{uploadBusy ? '…' : '📎'}</span>
+                </button>
                 <input
                   type="text"
                   value={draft}
-                  onChange={(e) => setDraft(e.target.value)}
+                  onChange={(e) => {
+                    setDraft(e.target.value)
+                    notifyTyping()
+                  }}
                   placeholder={t('chat.composerPlaceholder')}
+                  aria-label={t('chat.composerPlaceholder')}
                   maxLength={4000}
                 />
                 <button type="submit" disabled={!draft.trim() || messagesLoading}>

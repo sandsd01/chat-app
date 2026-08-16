@@ -81,6 +81,31 @@ describe("Push API", () => {
       const rows = await prisma.pushSubscription.findMany({ where: { userId: alice.id } });
       assert.equal(rows.length, 1);
     });
+
+    test("caps subscriptions per user, evicting the oldest first", async () => {
+      for (let i = 0; i < 21; i++) {
+        const res = await request(app)
+          .post("/api/push/subscribe")
+          .set("Authorization", `Bearer ${aliceToken}`)
+          .send({
+            subscription: {
+              endpoint: `https://push.example.com/device-${i}`,
+              keys: { p256dh: `p256dh-${i}`, auth: `auth-${i}` },
+            },
+          });
+        assert.equal(res.status, 204);
+      }
+
+      const rows = await prisma.pushSubscription.findMany({
+        where: { userId: alice.id },
+        orderBy: { createdAt: "asc" },
+      });
+      assert.equal(rows.length, 20);
+      // The very first subscription (device-0) should have been evicted;
+      // the most recent one (device-20) must survive.
+      assert.ok(!rows.some((r) => r.endpoint === "https://push.example.com/device-0"));
+      assert.ok(rows.some((r) => r.endpoint === "https://push.example.com/device-20"));
+    });
   });
 
   describe("POST /push/unsubscribe", () => {

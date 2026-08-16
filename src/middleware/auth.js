@@ -1,4 +1,5 @@
 const jwt = require("jsonwebtoken");
+const prisma = require("../../prisma/client");
 
 function authenticate(req, res, next) {
   const header = req.headers.authorization || "";
@@ -9,7 +10,11 @@ function authenticate(req, res, next) {
   }
 
   try {
-    const payload = jwt.verify(token, process.env.JWT_SECRET);
+    // Pinning algorithms is defense-in-depth against algorithm-confusion
+    // attacks even though sign/verify here always use the same HMAC secret
+    // (no asymmetric keys in play) — jsonwebtoken's own docs call this out
+    // as standard hardening.
+    const payload = jwt.verify(token, process.env.JWT_SECRET, { algorithms: ["HS256"] });
     req.user = { id: payload.sub, email: payload.email, role: payload.role };
     next();
   } catch {
@@ -26,4 +31,18 @@ function requireRole(...roles) {
   };
 }
 
-module.exports = { authenticate, requireRole };
+// Queried fresh per-request rather than embedded in the JWT: the token is
+// signed once at login and doesn't change when POST /auth/verify-email
+// succeeds later, so a claim baked in at sign-time would stay stale for the
+// rest of that session's 8-hour life. This is only applied to the one route
+// that's actually the abuse vector (sending a friend request) — see
+// src/routes/friends.js — not to every authenticated route.
+async function requireVerifiedEmail(req, res, next) {
+  const user = await prisma.user.findUnique({ where: { id: req.user.id }, select: { emailVerifiedAt: true } });
+  if (!user?.emailVerifiedAt) {
+    return res.status(403).json({ error: "Verify your email address before doing this" });
+  }
+  next();
+}
+
+module.exports = { authenticate, requireRole, requireVerifiedEmail };

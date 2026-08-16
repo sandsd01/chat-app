@@ -1,5 +1,13 @@
 import { StrictMode } from 'react'
 import { createRoot } from 'react-dom/client'
+// Self-hosted (not a Google Fonts <link>) so there's no third-party request
+// on every page load — matches this app's existing privacy posture (no
+// public user directory, Drive backups go to the user's own account, not a
+// shared server). Only the specific weights actually used are imported, not
+// each package's full index.css (which pulls every weight/style combo).
+import '@fontsource/ibm-plex-mono/400.css'
+import '@fontsource/ibm-plex-mono/500.css'
+import '@fontsource/source-serif-4/400.css'
 import './index.css'
 import App from './App.jsx'
 

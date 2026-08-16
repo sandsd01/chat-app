@@ -2,7 +2,9 @@ const crypto = require("node:crypto");
 const { test, describe, beforeEach } = require("node:test");
 const assert = require("node:assert/strict");
 const request = require("supertest");
+const jwt = require("jsonwebtoken");
 const { resetDb, createUser, prisma } = require("./helpers/db");
+const { createUserWithUniquePublicId } = require("../src/lib/publicId");
 const app = require("../src/app");
 
 function hashToken(token) {
@@ -69,6 +71,13 @@ describe("POST /auth/signup", () => {
     assert.equal(res.status, 400);
   });
 
+  test("rejects an invalid email format", async () => {
+    const res = await request(app)
+      .post("/api/auth/signup")
+      .send({ email: "notanemail", password: "newbiepass1" });
+    assert.equal(res.status, 400);
+  });
+
   test("409s on a duplicate email", async () => {
     await createUser({ email: "dup@test.com", password: "duppass1" });
     const res = await request(app)
@@ -86,12 +95,124 @@ describe("POST /auth/signup", () => {
       .send({ email: "b@test.com", password: "bpassword1" });
     assert.notEqual(a.body.user.publicId, b.body.user.publicId);
   });
+
+  test("a new account starts unverified and gets a verify token (RESEND_API_KEY unset in tests, so no real email sends)", async () => {
+    const res = await request(app)
+      .post("/api/auth/signup")
+      .send({ email: "unverified@test.com", password: "newbiepass1" });
+    assert.equal(res.body.user.emailVerifiedAt, null);
+
+    const stored = await prisma.user.findUnique({ where: { email: "unverified@test.com" } });
+    assert.ok(stored.verifyTokenHash);
+    assert.ok(stored.verifyTokenExpiresAt > new Date());
+  });
+});
+
+describe("Email verification", () => {
+  let user;
+
+  beforeEach(async () => {
+    await resetDb();
+    user = await createUser({ email: "toverify@test.com", password: "verifypass1", verified: false });
+  });
+
+  test("POST /auth/verify-email with a valid token marks the account verified", async () => {
+    const token = "test-verify-token";
+    await prisma.user.update({
+      where: { id: user.id },
+      data: { verifyTokenHash: hashToken(token), verifyTokenExpiresAt: new Date(Date.now() + 60 * 60 * 1000) },
+    });
+
+    const res = await request(app)
+      .post("/api/auth/verify-email")
+      .send({ email: "toverify@test.com", token });
+    assert.equal(res.status, 200);
+    assert.ok(res.body.emailVerifiedAt);
+
+    const updated = await prisma.user.findUnique({ where: { id: user.id } });
+    assert.ok(updated.emailVerifiedAt);
+    assert.equal(updated.verifyTokenHash, null);
+    assert.equal(updated.verifyTokenExpiresAt, null);
+  });
+
+  test("rejects an invalid token", async () => {
+    await prisma.user.update({
+      where: { id: user.id },
+      data: { verifyTokenHash: hashToken("real-token"), verifyTokenExpiresAt: new Date(Date.now() + 60 * 60 * 1000) },
+    });
+    const res = await request(app)
+      .post("/api/auth/verify-email")
+      .send({ email: "toverify@test.com", token: "wrong-token" });
+    assert.equal(res.status, 400);
+  });
+
+  test("rejects an expired token", async () => {
+    await prisma.user.update({
+      where: { id: user.id },
+      data: { verifyTokenHash: hashToken("expired-token"), verifyTokenExpiresAt: new Date(Date.now() - 1000) },
+    });
+    const res = await request(app)
+      .post("/api/auth/verify-email")
+      .send({ email: "toverify@test.com", token: "expired-token" });
+    assert.equal(res.status, 400);
+  });
+
+  test("400s on missing email or token", async () => {
+    const res = await request(app).post("/api/auth/verify-email").send({ email: "toverify@test.com" });
+    assert.equal(res.status, 400);
+  });
+
+  test("POST /auth/resend-verification requires authentication", async () => {
+    const res = await request(app).post("/api/auth/resend-verification");
+    assert.equal(res.status, 401);
+  });
+
+  test("POST /auth/resend-verification issues a fresh token for an unverified account", async () => {
+    const login = await request(app)
+      .post("/api/auth/login")
+      .send({ email: "toverify@test.com", password: "verifypass1" });
+
+    const res = await request(app)
+      .post("/api/auth/resend-verification")
+      .set("Authorization", `Bearer ${login.body.token}`);
+    assert.equal(res.status, 200);
+
+    const stored = await prisma.user.findUnique({ where: { id: user.id } });
+    assert.ok(stored.verifyTokenHash);
+    assert.ok(stored.verifyTokenExpiresAt > new Date());
+  });
+
+  test("POST /auth/resend-verification is a no-op message for an already-verified account", async () => {
+    const verified = await createUser({ email: "already@test.com", password: "verifypass1", verified: true });
+    const login = await request(app)
+      .post("/api/auth/login")
+      .send({ email: "already@test.com", password: "verifypass1" });
+
+    const res = await request(app)
+      .post("/api/auth/resend-verification")
+      .set("Authorization", `Bearer ${login.body.token}`);
+    assert.equal(res.status, 200);
+
+    const stored = await prisma.user.findUnique({ where: { id: verified.id } });
+    assert.equal(stored.verifyTokenHash, null);
+  });
+});
+
+describe("GET /auth/captcha-config", () => {
+  test("reports not configured (no TURNSTILE_SECRET_KEY in this test process)", async () => {
+    const res = await request(app).get("/api/auth/captcha-config");
+    assert.equal(res.status, 200);
+    assert.equal(res.body.configured, false);
+    assert.equal(res.body.siteKey, null);
+  });
 });
 
 describe("POST /auth/login", () => {
+  let alice;
+
   beforeEach(async () => {
     await resetDb();
-    await createUser({ email: "alice@test.com", password: "alicepass1" });
+    alice = await createUser({ email: "alice@test.com", password: "alicepass1" });
   });
 
   test("returns a token and user for valid credentials", async () => {
@@ -102,6 +223,7 @@ describe("POST /auth/login", () => {
     assert.ok(res.body.token);
     assert.equal(res.body.user.email, "alice@test.com");
     assert.equal(res.body.user.passwordHash, undefined);
+    assert.equal(res.body.user.hasPassword, true);
   });
 
   test("rejects an incorrect password", async () => {
@@ -121,6 +243,28 @@ describe("POST /auth/login", () => {
   test("requires email and password", async () => {
     const res = await request(app).post("/api/auth/login").send({});
     assert.equal(res.status, 400);
+  });
+
+  test("logs in with the account's publicId as the identifier, instead of email", async () => {
+    const res = await request(app)
+      .post("/api/auth/login")
+      .send({ identifier: alice.publicId, password: "alicepass1" });
+    assert.equal(res.status, 200);
+    assert.equal(res.body.user.email, "alice@test.com");
+  });
+
+  test("publicId login is case-insensitive", async () => {
+    const res = await request(app)
+      .post("/api/auth/login")
+      .send({ identifier: alice.publicId.toLowerCase(), password: "alicepass1" });
+    assert.equal(res.status, 200);
+  });
+
+  test("rejects an unknown publicId", async () => {
+    const res = await request(app)
+      .post("/api/auth/login")
+      .send({ identifier: "ZZZZZZZZ", password: "alicepass1" });
+    assert.equal(res.status, 401);
   });
 });
 
@@ -148,6 +292,19 @@ describe("GET /auth/me", () => {
     assert.equal(res.body.email, "alice@test.com");
     assert.equal(res.body.name, "Alice");
     assert.equal(res.body.passwordHash, undefined);
+  });
+
+  test("reports publicIdCustomized so the client knows whether the one-time change is still available", async () => {
+    await createUser({ email: "alice@test.com", password: "alicepass1", name: "Alice" });
+    const login = await request(app)
+      .post("/api/auth/login")
+      .send({ email: "alice@test.com", password: "alicepass1" });
+
+    const res = await request(app)
+      .get("/api/auth/me")
+      .set("Authorization", `Bearer ${login.body.token}`);
+
+    assert.equal(res.body.publicIdCustomized, false);
   });
 });
 
@@ -201,6 +358,64 @@ describe("PATCH /auth/password", () => {
       .patch("/api/auth/password")
       .set("Authorization", `Bearer ${token}`)
       .send({ currentPassword: "alicepass1", newPassword: "short" });
+    assert.equal(res.status, 400);
+  });
+});
+
+describe("PATCH /auth/password, setting a first password on a Google-only account", () => {
+  let googleUser;
+  let token;
+
+  beforeEach(async () => {
+    await resetDb();
+    googleUser = await createUserWithUniquePublicId(prisma, {
+      email: "googleuser@test.com",
+      googleId: "google-sub-test",
+      emailVerifiedAt: new Date(),
+    });
+    token = jwt.sign({ sub: googleUser.id, email: googleUser.email }, process.env.JWT_SECRET, { expiresIn: "8h" });
+  });
+
+  test("GET /auth/me reports hasPassword: false before a password is set", async () => {
+    const res = await request(app).get("/api/auth/me").set("Authorization", `Bearer ${token}`);
+    assert.equal(res.body.hasPassword, false);
+  });
+
+  test("sets a password without requiring currentPassword", async () => {
+    const res = await request(app)
+      .patch("/api/auth/password")
+      .set("Authorization", `Bearer ${token}`)
+      .send({ newPassword: "newpassword1" });
+    assert.equal(res.status, 200);
+  });
+
+  test("the new password then logs in, including by publicId", async () => {
+    await request(app)
+      .patch("/api/auth/password")
+      .set("Authorization", `Bearer ${token}`)
+      .send({ newPassword: "newpassword1" });
+
+    const res = await request(app)
+      .post("/api/auth/login")
+      .send({ identifier: googleUser.publicId, password: "newpassword1" });
+    assert.equal(res.status, 200);
+  });
+
+  test("GET /auth/me reports hasPassword: true after a password is set", async () => {
+    await request(app)
+      .patch("/api/auth/password")
+      .set("Authorization", `Bearer ${token}`)
+      .send({ newPassword: "newpassword1" });
+
+    const res = await request(app).get("/api/auth/me").set("Authorization", `Bearer ${token}`);
+    assert.equal(res.body.hasPassword, true);
+  });
+
+  test("rejects a newPassword shorter than 8 characters", async () => {
+    const res = await request(app)
+      .patch("/api/auth/password")
+      .set("Authorization", `Bearer ${token}`)
+      .send({ newPassword: "short" });
     assert.equal(res.status, 400);
   });
 });

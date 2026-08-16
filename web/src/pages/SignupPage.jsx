@@ -1,7 +1,11 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
 import { useAuth } from '../context/AuthContext'
 import { useLanguage } from '../context/LanguageContext'
+import { apiFetch } from '../api/client'
+import { Turnstile } from '../components/Turnstile'
+import { AuthBrand } from '../components/AuthBrand'
+import { useDocumentTitle } from '../hooks/useDocumentTitle'
 
 export function SignupPage() {
   const [email, setEmail] = useState('')
@@ -12,13 +16,29 @@ export function SignupPage() {
   const { signup } = useAuth()
   const { t } = useLanguage()
   const navigate = useNavigate()
+  useDocumentTitle(t('signup.title'))
+
+  // Unauthenticated on purpose — the signup page has no session yet. Stays
+  // null (rather than defaulting to "not configured") while the request is
+  // in flight so the widget doesn't flash in only after a slow response.
+  const [captchaConfig, setCaptchaConfig] = useState(null)
+  const [captchaToken, setCaptchaToken] = useState('')
+
+  useEffect(() => {
+    apiFetch('/auth/captcha-config')
+      .then(setCaptchaConfig)
+      .catch(() => setCaptchaConfig({ configured: false, siteKey: null }))
+  }, [])
+
+  const captchaRequired = captchaConfig?.configured
+  const captchaSatisfied = !captchaRequired || Boolean(captchaToken)
 
   async function handleSubmit(e) {
     e.preventDefault()
     setError(null)
     setLoading(true)
     try {
-      await signup(email, password, name)
+      await signup(email, password, name, captchaToken || undefined)
       navigate('/')
     } catch (err) {
       setError(err.message)
@@ -29,13 +49,10 @@ export function SignupPage() {
 
   return (
     <div className="centered">
-      <div className="auth-brand">
-        <span className="auth-brand-mark" aria-hidden="true">💬</span>
-        {t('common.appName')}
-      </div>
+      <AuthBrand />
       <form className="card" onSubmit={handleSubmit}>
         <h1>{t('signup.title')}</h1>
-        {error && <p className="error">{error}</p>}
+        {error && <p className="error" role="alert">{error}</p>}
         <label>
           {t('signup.name')}
           <input type="text" value={name} onChange={(e) => setName(e.target.value)} />
@@ -54,7 +71,11 @@ export function SignupPage() {
             required
           />
         </label>
-        <button type="submit" disabled={loading}>
+        <p className="friends-caption">{t('common.passwordHint')}</p>
+        {captchaRequired && (
+          <Turnstile siteKey={captchaConfig.siteKey} onToken={setCaptchaToken} />
+        )}
+        <button type="submit" disabled={loading || !captchaSatisfied}>
           {loading ? t('signup.submitting') : t('signup.submit')}
         </button>
         <div className="divider">

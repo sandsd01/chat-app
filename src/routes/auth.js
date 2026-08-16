@@ -6,17 +6,32 @@ const { OAuth2Client } = require("google-auth-library");
 const prisma = require("../../prisma/client");
 const { authenticate } = require("../middleware/auth");
 const { authLimiter } = require("../middleware/rateLimit");
-const { sendPasswordResetEmail } = require("../lib/email");
+const { sendPasswordResetEmail, sendVerificationEmail } = require("../lib/email");
+const { captchaConfigured, siteKey: captchaSiteKey, verifyCaptcha } = require("../lib/captcha");
 const { createUserWithUniquePublicId } = require("../lib/publicId");
+const { createTicketStore } = require("../lib/ticketStore");
 
 const router = express.Router();
 
 const MAX_FAILED_ATTEMPTS = 5;
 const LOCK_DURATION_MS = 15 * 60 * 1000;
 const RESET_TOKEN_EXPIRY_MS = 30 * 60 * 1000;
+// Longer-lived than the password reset token: that one guards changing a
+// credential right now, this one just confirms an inbox is real, so there's
+// less harm in a link still working a day later.
+const VERIFY_TOKEN_EXPIRY_MS = 24 * 60 * 60 * 1000;
+const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
 function hashToken(token) {
   return crypto.createHash("sha256").update(token).digest("hex");
+}
+
+// crypto.timingSafeEqual over `!==` for the same reason password checks go
+// through bcrypt.compare instead of a plain string compare — both sides are
+// fixed-length sha256 hex digests here, so lengths always match and this
+// never throws on that account.
+function hashesMatch(a, b) {
+  return crypto.timingSafeEqual(Buffer.from(a, "hex"), Buffer.from(b, "hex"));
 }
 
 function signToken(user) {
@@ -24,11 +39,42 @@ function signToken(user) {
 }
 
 function publicUser(user) {
-  return { id: user.id, publicId: user.publicId, email: user.email, name: user.name };
+  return {
+    id: user.id,
+    publicId: user.publicId,
+    publicIdCustomized: user.publicIdCustomized,
+    email: user.email,
+    name: user.name,
+    emailVerifiedAt: user.emailVerifiedAt,
+    hasPassword: Boolean(user.passwordHash),
+  };
 }
 
 function appUrl() {
   return process.env.APP_URL || "http://localhost:5173";
+}
+
+// Generates and stores a fresh verify token for `user`, then emails it —
+// shared by signup and POST /auth/resend-verification so there's one place
+// that decides the token shape/expiry/email copy. Never throws on a failed
+// send (matches forgot-password's own try/catch): a bounced or unconfigured
+// mail provider shouldn't turn into a 500 for the caller.
+async function issueEmailVerification(user) {
+  const token = crypto.randomBytes(32).toString("hex");
+  await prisma.user.update({
+    where: { id: user.id },
+    data: {
+      verifyTokenHash: hashToken(token),
+      verifyTokenExpiresAt: new Date(Date.now() + VERIFY_TOKEN_EXPIRY_MS),
+    },
+  });
+
+  const verifyUrl = `${appUrl()}/verify-email?token=${token}&email=${encodeURIComponent(user.email)}`;
+  try {
+    await sendVerificationEmail(user, verifyUrl);
+  } catch (err) {
+    console.error("Failed to send verification email:", err);
+  }
 }
 
 // --- Google sign-in --------------------------------------------------------
@@ -52,24 +98,7 @@ const OAUTH_STATE_TTL_MS = 5 * 60 * 1000;
 // URL (history, Referer, server logs), so the callback mints one of these
 // instead and the SPA exchanges it for the real token from JS.
 const LOGIN_TICKET_TTL_MS = 30 * 1000;
-const loginTickets = new Map(); // ticket -> { userId, expiresAt }
-
-function issueLoginTicket(userId) {
-  const ticket = crypto.randomBytes(24).toString("hex");
-  const expiresAt = Date.now() + LOGIN_TICKET_TTL_MS;
-  loginTickets.set(ticket, { userId, expiresAt });
-  const timer = setTimeout(() => loginTickets.delete(ticket), LOGIN_TICKET_TTL_MS);
-  timer.unref?.();
-  return ticket;
-}
-
-function consumeLoginTicket(ticket) {
-  const entry = loginTickets.get(ticket);
-  if (!entry) return null;
-  loginTickets.delete(ticket);
-  if (entry.expiresAt < Date.now()) return null;
-  return entry.userId;
-}
+const loginTickets = createTicketStore(LOGIN_TICKET_TTL_MS);
 
 router.get("/google", (_req, res) => {
   if (!googleConfigured) {
@@ -127,23 +156,30 @@ router.get("/google/callback", async (req, res) => {
     // person signing in a different way, not a spoof risk.
     const byEmail = await prisma.user.findUnique({ where: { email: payload.email } });
     if (byEmail) {
-      user = await prisma.user.update({ where: { id: byEmail.id }, data: { googleId: payload.sub } });
+      // Also marks the account verified if it somehow wasn't yet — reaching
+      // this branch already required payload.email_verified above, so this
+      // is a Google-verified email regardless of how the account started.
+      user = await prisma.user.update({
+        where: { id: byEmail.id },
+        data: { googleId: payload.sub, emailVerifiedAt: byEmail.emailVerifiedAt || new Date() },
+      });
     } else {
       user = await createUserWithUniquePublicId(prisma, {
         email: payload.email,
         googleId: payload.sub,
         name: payload.name || undefined,
+        emailVerifiedAt: new Date(),
       });
     }
   }
 
-  const loginTicket = issueLoginTicket(user.id);
+  const loginTicket = loginTickets.issue(user.id);
   res.redirect(`${appUrl()}/oauth-callback?ticket=${loginTicket}`);
 });
 
 router.post("/google/exchange", async (req, res) => {
   const { ticket } = req.body || {};
-  const userId = typeof ticket === "string" ? consumeLoginTicket(ticket) : null;
+  const userId = typeof ticket === "string" ? loginTickets.consume(ticket) : null;
   if (!userId) return res.status(401).json({ error: "Invalid or expired ticket" });
 
   const user = await prisma.user.findUnique({ where: { id: userId } });
@@ -152,19 +188,25 @@ router.post("/google/exchange", async (req, res) => {
   res.json({ token: signToken(user), user: publicUser(user) });
 });
 
-// Minimal email+password self-signup. This is a placeholder for the Google
-// sign-in phase (see CLAUDE.md's Roadmap) — kept intentionally bare (no email
-// verification, no CAPTCHA) because it exists only so the friend-by-ID system
-// has real accounts to test against locally, not as the production signup
-// flow. Revisit rate limiting and abuse protection before this is the only
-// way to create an account in a public deployment.
+// Email+password self-signup. Google sign-in (below) is Google-vetted and
+// already comes with a verified email for free; this path doesn't have
+// that, so it carries its own hardening: an optional CAPTCHA check (see
+// captchaConfigured below) and a mandatory post-signup email verification
+// step. Neither blocks local/dev use — see src/lib/captcha.js and
+// issueEmailVerification's own not-configured fallback.
 router.post("/signup", authLimiter, async (req, res) => {
-  const { email, password, name } = req.body || {};
+  const { email, password, name, captchaToken } = req.body || {};
   if (!email || !password) {
     return res.status(400).json({ error: "email and password are required" });
   }
+  if (!EMAIL_RE.test(email)) {
+    return res.status(400).json({ error: "email is not a valid email address" });
+  }
   if (password.length < 8) {
     return res.status(400).json({ error: "password must be at least 8 characters" });
+  }
+  if (captchaConfigured && !(await verifyCaptcha(captchaToken, req.ip))) {
+    return res.status(400).json({ error: "CAPTCHA verification failed" });
   }
 
   const existing = await prisma.user.findUnique({ where: { email } });
@@ -178,19 +220,27 @@ router.post("/signup", authLimiter, async (req, res) => {
     passwordHash,
     name: name || undefined,
   });
+  await issueEmailVerification(user);
 
   res.status(201).json({ token: signToken(user), user: publicUser(user) });
 });
 
 router.post("/login", authLimiter, async (req, res) => {
-  const { email, password } = req.body || {};
-  if (!email || !password) {
-    return res.status(400).json({ error: "email and password are required" });
+  const { password } = req.body || {};
+  const identifier = req.body?.identifier || req.body?.email;
+  if (!identifier || !password) {
+    return res.status(400).json({ error: "identifier and password are required" });
   }
 
-  const user = await prisma.user.findUnique({ where: { email } });
+  // Same email-shape detection already used elsewhere in this file — anything
+  // that isn't email-shaped is treated as a publicId lookup, uppercased to
+  // match how publicIds are always stored (see src/lib/publicId.js and
+  // GET /friends/lookup's identical .toUpperCase() normalization).
+  const user = EMAIL_RE.test(identifier)
+    ? await prisma.user.findUnique({ where: { email: identifier } })
+    : await prisma.user.findUnique({ where: { publicId: identifier.toUpperCase() } });
   if (!user) {
-    return res.status(401).json({ error: "Invalid email or password" });
+    return res.status(401).json({ error: "Invalid ID/email or password" });
   }
 
   if (user.lockedUntil && user.lockedUntil > new Date()) {
@@ -224,7 +274,7 @@ router.post("/login", authLimiter, async (req, res) => {
         error: "Account locked due to too many failed login attempts. Try again later.",
       });
     }
-    return res.status(401).json({ error: "Invalid email or password" });
+    return res.status(401).json({ error: "Invalid ID/email or password" });
   }
 
   if (user.failedLoginAttempts > 0 || user.lockedUntil) {
@@ -235,6 +285,53 @@ router.post("/login", authLimiter, async (req, res) => {
   }
 
   res.json({ token: signToken(user), user: publicUser(user) });
+});
+
+// Public: the signup page needs this before there's any session to
+// authenticate. siteKey is safe to hand out (it's meant to be embedded in a
+// page); returning null when unconfigured lets the frontend just skip
+// rendering the widget, same shape as every other optional-service check.
+router.get("/captcha-config", (_req, res) => {
+  res.json({ configured: captchaConfigured, siteKey: captchaConfigured ? captchaSiteKey : null });
+});
+
+router.post("/verify-email", authLimiter, async (req, res) => {
+  const { email, token } = req.body || {};
+  if (!email || !token) {
+    return res.status(400).json({ error: "email and token are required" });
+  }
+
+  const user = await prisma.user.findUnique({ where: { email } });
+  if (
+    !user ||
+    !user.verifyTokenHash ||
+    !user.verifyTokenExpiresAt ||
+    user.verifyTokenExpiresAt < new Date() ||
+    !hashesMatch(user.verifyTokenHash, hashToken(token))
+  ) {
+    return res.status(400).json({ error: "Invalid or expired verification link" });
+  }
+
+  const updated = await prisma.user.update({
+    where: { id: user.id },
+    data: { emailVerifiedAt: new Date(), verifyTokenHash: null, verifyTokenExpiresAt: null },
+  });
+
+  res.json({ message: "Email verified.", emailVerifiedAt: updated.emailVerifiedAt });
+});
+
+// Authenticated (unlike verify-email above) since there's no token to prove
+// identity here — the caller's own session is what says who to re-email.
+router.post("/resend-verification", authLimiter, authenticate, async (req, res) => {
+  const user = await prisma.user.findUnique({ where: { id: req.user.id } });
+  if (!user) return res.status(404).json({ error: "User not found" });
+
+  if (user.emailVerifiedAt) {
+    return res.json({ message: "Your email is already verified." });
+  }
+
+  await issueEmailVerification(user);
+  res.json({ message: "Verification email sent." });
 });
 
 router.get("/me", authenticate, async (req, res) => {
@@ -250,26 +347,31 @@ router.post("/logout", (_req, res) => {
 
 router.patch("/password", authenticate, async (req, res) => {
   const { currentPassword, newPassword } = req.body || {};
-  if (!currentPassword || !newPassword) {
-    return res.status(400).json({ error: "currentPassword and newPassword are required" });
+  if (!newPassword) {
+    return res.status(400).json({ error: "newPassword is required" });
   }
   if (newPassword.length < 8) {
     return res.status(400).json({ error: "newPassword must be at least 8 characters" });
   }
 
   const user = await prisma.user.findUnique({ where: { id: req.user.id } });
-  if (!user.passwordHash) {
-    return res.status(400).json({ error: "This account signs in with Google and has no password to change" });
-  }
-  const valid = await bcrypt.compare(currentPassword, user.passwordHash);
-  if (!valid) {
-    return res.status(401).json({ error: "Current password is incorrect" });
+  // A Google-only account (passwordHash null) has nothing to verify against —
+  // this is *setting* its first password, not changing one, so currentPassword
+  // isn't required. An account that already has a password still needs it.
+  if (user.passwordHash) {
+    if (!currentPassword) {
+      return res.status(400).json({ error: "currentPassword is required" });
+    }
+    const valid = await bcrypt.compare(currentPassword, user.passwordHash);
+    if (!valid) {
+      return res.status(401).json({ error: "Current password is incorrect" });
+    }
   }
 
   const passwordHash = await bcrypt.hash(newPassword, 10);
   await prisma.user.update({ where: { id: user.id }, data: { passwordHash } });
 
-  res.json({ message: "Password updated" });
+  res.json({ message: user.passwordHash ? "Password updated" : "Password set" });
 });
 
 router.post("/forgot-password", authLimiter, async (req, res) => {
@@ -294,8 +396,7 @@ router.post("/forgot-password", authLimiter, async (req, res) => {
     },
   });
 
-  const appUrl = process.env.APP_URL || "http://localhost:5173";
-  const resetUrl = `${appUrl}/reset-password?token=${token}&email=${encodeURIComponent(email)}`;
+  const resetUrl = `${appUrl()}/reset-password?token=${token}&email=${encodeURIComponent(email)}`;
 
   try {
     await sendPasswordResetEmail(user, resetUrl);
@@ -306,7 +407,7 @@ router.post("/forgot-password", authLimiter, async (req, res) => {
   res.json(genericResponse);
 });
 
-router.post("/reset-password", async (req, res) => {
+router.post("/reset-password", authLimiter, async (req, res) => {
   const { email, token, newPassword } = req.body || {};
   if (!email || !token || !newPassword) {
     return res.status(400).json({ error: "email, token, and newPassword are required" });
@@ -321,7 +422,7 @@ router.post("/reset-password", async (req, res) => {
     !user.resetTokenHash ||
     !user.resetTokenExpiresAt ||
     user.resetTokenExpiresAt < new Date() ||
-    user.resetTokenHash !== hashToken(token)
+    !hashesMatch(user.resetTokenHash, hashToken(token))
   ) {
     return res.status(400).json({ error: "Invalid or expired reset token" });
   }

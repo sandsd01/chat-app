@@ -2,6 +2,8 @@ import { useState } from 'react'
 import { Link, useNavigate, useSearchParams } from 'react-router-dom'
 import { useAuth } from '../context/AuthContext'
 import { useLanguage } from '../context/LanguageContext'
+import { AuthBrand } from '../components/AuthBrand'
+import { useDocumentTitle } from '../hooks/useDocumentTitle'
 
 const OAUTH_ERROR_KEYS = {
   invalid_state: 'login.oauthErrorState',
@@ -11,7 +13,7 @@ const OAUTH_ERROR_KEYS = {
 }
 
 export function LoginPage() {
-  const [email, setEmail] = useState('')
+  const [identifier, setIdentifier] = useState('')
   const [password, setPassword] = useState('')
   const [error, setError] = useState(null)
   const [loading, setLoading] = useState(false)
@@ -19,6 +21,7 @@ export function LoginPage() {
   const { language, setLanguage, t } = useLanguage()
   const navigate = useNavigate()
   const [searchParams] = useSearchParams()
+  useDocumentTitle(t('login.title'))
 
   const oauthErrorCode = searchParams.get('error')
   const oauthError = oauthErrorCode
@@ -30,7 +33,7 @@ export function LoginPage() {
     setError(null)
     setLoading(true)
     try {
-      await login(email, password)
+      await login(identifier, password)
       navigate('/')
     } catch (err) {
       setError(err.message)
@@ -41,10 +44,7 @@ export function LoginPage() {
 
   return (
     <div className="centered">
-      <div className="auth-brand">
-        <span className="auth-brand-mark" aria-hidden="true">💬</span>
-        {t('common.appName')}
-      </div>
+      <AuthBrand />
       <form className="card" onSubmit={handleSubmit}>
         <div className="page-header">
           <h1>{t('login.title')}</h1>
@@ -52,20 +52,21 @@ export function LoginPage() {
             className="language-select"
             value={language}
             onChange={(e) => setLanguage(e.target.value)}
-            aria-label="Language"
+            aria-label={t('nav.language')}
           >
             <option value="en">EN</option>
             <option value="th">ไทย</option>
           </select>
         </div>
-        {oauthError && <p className="error">{oauthError}</p>}
-        {error && <p className="error">{error}</p>}
+        {oauthError && <p className="error" role="alert">{oauthError}</p>}
+        {error && <p className="error" role="alert">{error}</p>}
         <label>
-          {t('login.email')}
+          {t('login.identifier')}
           <input
-            type="email"
-            value={email}
-            onChange={(e) => setEmail(e.target.value)}
+            type="text"
+            autoComplete="username"
+            value={identifier}
+            onChange={(e) => setIdentifier(e.target.value)}
             required
           />
         </label>
