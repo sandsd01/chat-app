@@ -70,8 +70,24 @@ router.delete("/me", async (req, res) => {
   if (hasMessages) {
     return res.status(409).json({ error: "Cannot delete an account with sent messages" });
   }
+  // Friendship rows are the other place account deletion would otherwise
+  // orphan someone else's data (their side of the relationship/request) —
+  // same "refuse rather than orphan" reasoning as conversations/messages
+  // above. Reachable independently of those two checks: two accounts can be
+  // friends (or have a pending request) without ever having opened a chat.
+  const hasFriendships = await prisma.friendship.findFirst({
+    where: { OR: [{ userAId: id }, { userBId: id }] },
+  });
+  if (hasFriendships) {
+    return res.status(409).json({ error: "Cannot delete an account with friend connections or pending requests" });
+  }
 
   try {
+    // Unlike conversations/friendships, a push subscription is this
+    // account's own device registration with no other party's data in it —
+    // safe to clear here rather than 409ing and making deletion depend on a
+    // "manage your push subscriptions" step that doesn't otherwise exist.
+    await prisma.pushSubscription.deleteMany({ where: { userId: id } });
     await prisma.user.delete({ where: { id } });
   } catch (err) {
     // The checks above are read-then-act, not transactional — a message

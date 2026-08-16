@@ -810,6 +810,27 @@ describe("Chat API", () => {
       assert.equal(rows.length, 1, "must not create a duplicate row");
     });
 
+    test("two concurrent adds of the same reaction never 500 and never create a duplicate row", async () => {
+      const conv = await createConversation(adminToken, staffUser.id);
+      const msg = await sendMessage(adminToken, conv.body.id, "hi");
+
+      const [first, second] = await Promise.all([
+        request(app)
+          .post(`/api/chat/conversations/${conv.body.id}/messages/${msg.body.id}/reactions`)
+          .set("Authorization", `Bearer ${staffToken}`)
+          .send({ emoji: "👍" }),
+        request(app)
+          .post(`/api/chat/conversations/${conv.body.id}/messages/${msg.body.id}/reactions`)
+          .set("Authorization", `Bearer ${staffToken}`)
+          .send({ emoji: "👍" }),
+      ]);
+      assert.ok([200, 201].includes(first.status), `unexpected status ${first.status}`);
+      assert.ok([200, 201].includes(second.status), `unexpected status ${second.status}`);
+
+      const rows = await prisma.messageReaction.findMany({ where: { messageId: msg.body.id } });
+      assert.equal(rows.length, 1, "must not create a duplicate row");
+    });
+
     test("DELETE 404 when the caller never reacted with that emoji", async () => {
       const conv = await createConversation(adminToken, staffUser.id);
       const msg = await sendMessage(adminToken, conv.body.id, "hi");
@@ -1133,6 +1154,40 @@ describe("Chat API", () => {
         .set("Authorization", `Bearer ${messengerToken}`);
       assert.equal(res.status, 409);
       assert.deepEqual(res.body, { error: "Cannot delete an account with sent messages" });
+    });
+
+    test("409s with a friendship-specific error for a caller who is friends but has no conversation or message", async () => {
+      // Two accounts can accept a friend request without ever opening a
+      // chat — the Friendship row's FK would otherwise surface as the
+      // generic "chat conversations" P2003 fallback, which is the wrong
+      // reason. See src/routes/users.js's explicit hasFriendships check.
+      const social = await createUser({ email: "social@test.com", password: "pass12345" });
+      const socialToken = await login("social@test.com", "pass12345");
+      await makeFriends(social, staffUser);
+
+      const res = await request(app).delete("/api/users/me").set("Authorization", `Bearer ${socialToken}`);
+      assert.equal(res.status, 409);
+      assert.deepEqual(res.body, { error: "Cannot delete an account with friend connections or pending requests" });
+
+      const stillThere = await prisma.user.findUnique({ where: { id: social.id } });
+      assert.ok(stillThere, "user must not have been deleted");
+    });
+
+    test("deletes cleanly for a caller with no chat/friend data but a registered push subscription", async () => {
+      // A push subscription is this account's own device registration, not
+      // shared with anyone else — deletion should clear it rather than
+      // 409ing on it (see src/routes/users.js's pushSubscription.deleteMany).
+      const pushy = await createUser({ email: "pushy@test.com", password: "pass12345" });
+      const pushyToken = await login("pushy@test.com", "pass12345");
+      await prisma.pushSubscription.create({
+        data: { userId: pushy.id, endpoint: "https://push.example/pushy", p256dh: "key", authKey: "auth" },
+      });
+
+      const res = await request(app).delete("/api/users/me").set("Authorization", `Bearer ${pushyToken}`);
+      assert.equal(res.status, 204);
+
+      const stillThere = await prisma.user.findUnique({ where: { id: pushy.id } });
+      assert.equal(stillThere, null);
     });
 
     test("does not 500 (falls through to a clean delete) for a caller with no chat data", async () => {

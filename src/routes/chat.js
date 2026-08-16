@@ -587,7 +587,15 @@ router.post("/conversations/:id/messages/:messageId/reactions", async (req, res)
     return res.status(200).json(payload);
   }
 
-  await prisma.messageReaction.create({ data: { messageId: message.id, userId: req.user.id, emoji } });
+  try {
+    await prisma.messageReaction.create({ data: { messageId: message.id, userId: req.user.id, emoji } });
+  } catch (err) {
+    // Two near-simultaneous adds (a double-tap) can both pass the findUnique
+    // check above and race here — P2002 is that race, not a real conflict,
+    // so it gets the same idempotent 200 the pre-check above returns.
+    if (err.code === "P2002") return res.status(200).json(payload);
+    throw err;
+  }
 
   publishToBoth(conversation, "reaction-added", payload);
 

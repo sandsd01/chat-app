@@ -24,6 +24,14 @@ if (process.env.TRUST_PROXY) {
   app.set("trust proxy", Number.isNaN(value) ? process.env.TRUST_PROXY : value);
 }
 
+// Attachments (src/lib/attachments.js) are served/uploaded via presigned R2
+// URLs that the browser talks to directly — img tags load them and
+// uploadFileToR2 PUTs to them — so both img-src and connect-src need that
+// origin allowed, or the default same-origin CSP silently blocks every
+// attachment. Only added when R2 is actually configured, same
+// optional-service gating as attachmentsConfigured itself.
+const r2Origin = process.env.R2_ACCOUNT_ID ? `https://${process.env.R2_ACCOUNT_ID}.r2.cloudflarestorage.com` : null;
+
 app.use(
   helmet({
     // The SPA and the API share an origin in production, so the default
@@ -31,7 +39,8 @@ app.use(
     contentSecurityPolicy: {
       directives: {
         ...helmet.contentSecurityPolicy.getDefaultDirectives(),
-        "img-src": ["'self'", "data:", "blob:"],
+        "img-src": ["'self'", "data:", "blob:", ...(r2Origin ? [r2Origin] : [])],
+        "connect-src": ["'self'", ...(r2Origin ? [r2Origin] : [])],
         // Vite injects the stylesheet as a file, but a few components set
         // inline style attributes, which style-src-attr covers.
         "style-src": ["'self'", "'unsafe-inline'"],
