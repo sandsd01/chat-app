@@ -3,6 +3,7 @@ import { Link, useNavigate, useSearchParams } from 'react-router-dom'
 import { useAuth } from '../context/AuthContext'
 import { useLanguage } from '../context/LanguageContext'
 import { AuthBrand } from '../components/AuthBrand'
+import { useDocumentTitle } from '../hooks/useDocumentTitle'
 
 export function OAuthCallbackPage() {
   const [searchParams] = useSearchParams()
@@ -11,6 +12,7 @@ export function OAuthCallbackPage() {
   const { t } = useLanguage()
   const navigate = useNavigate()
   const [error, setError] = useState(null)
+  useDocumentTitle()
 
   useEffect(() => {
     if (!ticket) {

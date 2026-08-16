@@ -6,6 +6,7 @@ import { useAuth } from '../context/AuthContext'
 import { useLanguage } from '../context/LanguageContext'
 import { usePushSubscription } from '../hooks/usePushSubscription'
 import { useDriveBackup } from '../hooks/useDriveBackup'
+import { useDocumentTitle } from '../hooks/useDocumentTitle'
 import { TicketId } from '../components/TicketId'
 
 const PUBLIC_ID_PATTERN = /^[a-zA-Z0-9]{4,20}$/
@@ -21,6 +22,7 @@ export function AccountPage() {
   const { token, user, updateUser, logout } = useAuth()
   const { t } = useLanguage()
   const navigate = useNavigate()
+  useDocumentTitle(t('account.title'))
   const [currentPassword, setCurrentPassword] = useState('')
   const [newPassword, setNewPassword] = useState('')
   const [error, setError] = useState(null)

@@ -20,6 +20,7 @@ import {
 import { useDriveBackup } from '../hooks/useDriveBackup'
 import { EmojiPicker } from '../components/EmojiPicker'
 import { initials, localeFor, CLEARED_ATTACHMENT_FIELDS } from '../lib/format'
+import { useDocumentTitle } from '../hooks/useDocumentTitle'
 
 const MESSAGE_PAGE_SIZE = 50
 const SCROLL_BOTTOM_THRESHOLD = 80
@@ -540,6 +541,7 @@ export function ChatPage() {
   const threadHeaderName = activeConversation
     ? activeConversation.otherUser.name || activeConversation.otherUser.email
     : t('common.loading')
+  useDocumentTitle(activeConversation ? threadHeaderName : t('nav.chat'))
 
   // Only the caller's most recent (sent, non-failed) message gets a "Read"
   // tick — matching how WhatsApp/Telegram/etc. show it once per thread
@@ -693,7 +695,11 @@ export function ChatPage() {
               )}
 
               {(connectionState === 'reconnecting' || connectionState === 'down') && (
-                <div className={`chat-stream-banner${connectionState === 'down' ? ' down' : ''}`}>
+                <div
+                  className={`chat-stream-banner${connectionState === 'down' ? ' down' : ''}`}
+                  role="status"
+                  aria-live={connectionState === 'down' ? 'assertive' : 'polite'}
+                >
                   <span>{connectionState === 'down' ? t('chat.disconnected') : t('chat.reconnecting')}</span>
                   {connectionState === 'down' && (
                     <button type="button" onClick={() => window.location.reload()}>
@@ -766,6 +772,7 @@ export function ChatPage() {
                                   onChange={(e) => setEditingDraft(e.target.value)}
                                   maxLength={4000}
                                   autoFocus
+                                  aria-label={t('chat.editMessage')}
                                 />
                                 <div className="chat-bubble-edit-actions">
                                   <button type="button" onClick={() => saveEdit(m.id)} disabled={!editingDraft.trim()}>

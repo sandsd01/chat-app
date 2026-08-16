@@ -3,6 +3,7 @@ import { Link, useNavigate, useSearchParams } from 'react-router-dom'
 import { useAuth } from '../context/AuthContext'
 import { useLanguage } from '../context/LanguageContext'
 import { AuthBrand } from '../components/AuthBrand'
+import { useDocumentTitle } from '../hooks/useDocumentTitle'
 
 const OAUTH_ERROR_KEYS = {
   invalid_state: 'login.oauthErrorState',
@@ -20,6 +21,7 @@ export function LoginPage() {
   const { language, setLanguage, t } = useLanguage()
   const navigate = useNavigate()
   const [searchParams] = useSearchParams()
+  useDocumentTitle(t('login.title'))
 
   const oauthErrorCode = searchParams.get('error')
   const oauthError = oauthErrorCode

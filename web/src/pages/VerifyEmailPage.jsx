@@ -4,10 +4,12 @@ import { apiFetch } from '../api/client'
 import { useAuth } from '../context/AuthContext'
 import { useLanguage } from '../context/LanguageContext'
 import { AuthBrand } from '../components/AuthBrand'
+import { useDocumentTitle } from '../hooks/useDocumentTitle'
 
 // 'pending' | 'success' | 'error'
 export function VerifyEmailPage() {
   const { t } = useLanguage()
+  useDocumentTitle(t('verifyEmail.title'))
   const { user, updateUser } = useAuth()
   const [searchParams] = useSearchParams()
   const email = searchParams.get('email')
@@ -43,7 +45,7 @@ export function VerifyEmailPage() {
       <AuthBrand />
       <div className="card">
         <h1>{t('verifyEmail.title')}</h1>
-        {status === 'pending' && <p className="hint">{t('common.loading')}</p>}
+        {status === 'pending' && <p className="hint" role="status">{t('common.loading')}</p>}
         {status === 'success' && <p className="notice">{t('verifyEmail.success')}</p>}
         {status === 'error' && <p className="error" role="alert">{error || t('verifyEmail.invalidLink')}</p>}
         <Link to={user ? '/chat' : '/login'}>

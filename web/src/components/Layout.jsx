@@ -1,4 +1,5 @@
-import { NavLink, Outlet, useNavigate } from 'react-router-dom'
+import { useEffect, useRef } from 'react'
+import { NavLink, Outlet, useLocation, useNavigate } from 'react-router-dom'
 import { useAuth } from '../context/AuthContext'
 import { useLanguage } from '../context/LanguageContext'
 import { useChat } from '../context/ChatContext'
@@ -11,6 +12,22 @@ export function Layout() {
   const { unreadTotal } = useChat()
   const { incomingCount } = useFriends()
   const navigate = useNavigate()
+  const location = useLocation()
+  const mainRef = useRef(null)
+  const isFirstRenderRef = useRef(true)
+
+  // Move focus to the new view on every client-side navigation — React
+  // Router doesn't reload the page, so without this a keyboard/screen-reader
+  // user's focus is left on a now-unmounted control from the previous page.
+  // Skipped on the very first render so page load doesn't steal focus away
+  // from the skip link or the browser's own address bar.
+  useEffect(() => {
+    if (isFirstRenderRef.current) {
+      isFirstRenderRef.current = false
+      return
+    }
+    mainRef.current?.focus()
+  }, [location.pathname])
 
   function handleLogout() {
     logout()
@@ -61,7 +78,7 @@ export function Layout() {
           </>
         )}
       </nav>
-      <main id="main-content" className="content" tabIndex={-1}>
+      <main id="main-content" className="content" tabIndex={-1} ref={mainRef}>
         <Outlet />
       </main>
     </div>
