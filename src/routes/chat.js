@@ -4,7 +4,6 @@ const { authenticate } = require("../middleware/auth");
 const chatBus = require("../lib/chatBus");
 const { areFriends } = require("./friends");
 const { sendPushToUser } = require("../lib/push");
-const { readArchivedMessages } = require("../lib/drive");
 const { attachmentsConfigured, createUploadUrl, verifyUploadedObject, createDownloadUrl } = require("../lib/attachments");
 const { createTicketStore } = require("../lib/ticketStore");
 
@@ -316,34 +315,6 @@ router.get("/conversations/:id/messages/search", async (req, res) => {
   );
 
   res.json({ data, hasMore, nextBefore: hasMore ? page[page.length - 1].id : null });
-});
-
-// Falls back to the CALLER's own Google Drive archive once Postgres has
-// nothing older than `before` left — a message only leaves Postgres once
-// every participant has archived it (src/lib/drive.js#pruneArchivedMessages),
-// so a still-there message wouldn't be here anyway. Same {data, hasMore,
-// nextBefore} shape as the route above on purpose, so the frontend's
-// "keep scrolling up" logic doesn't need to care which source a page came
-// from. Never 404s for "not connected" or "never archived this
-// conversation" — those are normal, empty-page outcomes here, not errors;
-// only an actual failure to reach Drive (a real network/API problem) is a
-// 502.
-router.get("/conversations/:id/messages/drive-history", async (req, res) => {
-  const conversationId = Number(req.params.id);
-  const conversation = await getConversationForParticipant(conversationId, req.user.id);
-  if (!conversation) return res.status(404).json({ error: "Conversation not found" });
-
-  const paging = parsePagingParams(req);
-  if (!paging) return res.status(400).json({ error: "before must be a message id" });
-  const { limit, before } = paging;
-
-  try {
-    const result = await readArchivedMessages(req.user.id, conversationId, { before, limit });
-    res.json(result);
-  } catch (err) {
-    console.error("Reading Drive-archived history failed:", err.message);
-    res.status(502).json({ error: "Could not read archived history from Google Drive" });
-  }
 });
 
 router.post("/conversations/:id/messages", async (req, res) => {

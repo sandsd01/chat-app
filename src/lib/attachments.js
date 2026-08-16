@@ -13,7 +13,7 @@ const R2_BUCKET_NAME = process.env.R2_BUCKET_NAME;
 
 const attachmentsConfigured = Boolean(R2_ACCOUNT_ID && R2_ACCESS_KEY_ID && R2_SECRET_ACCESS_KEY && R2_BUCKET_NAME);
 
-// Optional like Drive/Push/Google sign-in: null rather than a client built
+// Optional like Push/Google sign-in: null rather than a client built
 // from undefined credentials when unconfigured, so nothing downstream can
 // accidentally make a real network call in that state.
 const s3Client = attachmentsConfigured

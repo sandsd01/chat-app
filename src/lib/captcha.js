@@ -1,5 +1,5 @@
 // Cloudflare Turnstile verification for POST /auth/signup — optional in the
-// same way Google sign-in/Drive backup/Web Push are: unset TURNSTILE_SECRET_KEY
+// same way Google sign-in/Web Push are: unset TURNSTILE_SECRET_KEY
 // and signup simply skips the check rather than the app failing to start or
 // every signup 500ing. siteKey is not a secret (it's rendered into the
 // signup page itself) but is still served from GET /auth/captcha-config

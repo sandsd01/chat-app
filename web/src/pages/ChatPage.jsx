@@ -6,7 +6,6 @@ import { useChat } from '../context/ChatContext'
 import { useFriends } from '../context/FriendsContext'
 import {
   listMessages,
-  listDriveHistory,
   sendMessage,
   requestUpload,
   uploadFileToR2,
@@ -17,7 +16,6 @@ import {
   addReaction,
   removeReaction,
 } from '../api/chat'
-import { useDriveBackup } from '../hooks/useDriveBackup'
 import { EmojiPicker } from '../components/EmojiPicker'
 import { initials, localeFor, CLEARED_ATTACHMENT_FIELDS } from '../lib/format'
 import { useDocumentTitle } from '../hooks/useDocumentTitle'
@@ -72,12 +70,6 @@ export function ChatPage() {
     startChat,
   } = useChat()
   const { friends } = useFriends()
-  // Only worth trying the Drive fallback once Postgres history runs out if
-  // this account even has Drive connected — otherwise every conversation's
-  // "reached the top" moment would fire a request that can only ever come
-  // back empty.
-  const { status: driveStatus } = useDriveBackup(token)
-  const driveConnected = driveStatus === 'connected'
 
   const activeConversationId = conversationIdParam ? Number(conversationIdParam) : null
   const activeConversation = conversations.find((c) => c.id === activeConversationId) || null
@@ -146,7 +138,6 @@ export function ChatPage() {
   // Tracked separately from hasMore/nextBefore: only consulted once
   // Postgres's own hasMore goes false, and reset per-conversation the same
   // way (see the load effect below).
-  const [driveHasMore, setDriveHasMore] = useState(false)
   const [loadingOlder, setLoadingOlder] = useState(false)
   // Announced through a visually-hidden live region below — loadOlder()
   // prepends messages above the current scroll position with no visible
@@ -166,9 +157,9 @@ export function ChatPage() {
 
   // -- In-thread search -------------------------------------------------------
   // A separate result list rather than trying to scroll/highlight a match
-  // inside the already-loaded thread: older matches may not be loaded (or
-  // may only exist in Drive) at all, so "jump to it in place" isn't always
-  // possible. Debounced, and scoped to whichever conversation is open.
+  // inside the already-loaded thread: an older match may not be loaded into
+  // the thread yet, so "jump to it in place" isn't always possible.
+  // Debounced, and scoped to whichever conversation is open.
   const [searchOpen, setSearchOpen] = useState(false)
   const [searchQuery, setSearchQuery] = useState('')
   const [searchResults, setSearchResults] = useState(null)
@@ -220,7 +211,6 @@ export function ChatPage() {
       setMessages([])
       setHasMore(false)
       setNextBefore(null)
-      setDriveHasMore(false)
       return
     }
     let cancelled = false
@@ -232,7 +222,6 @@ export function ChatPage() {
         setMessages([...res.data].reverse())
         setHasMore(res.hasMore)
         setNextBefore(res.nextBefore)
-        setDriveHasMore(driveConnected)
         isAtBottomRef.current = true
         requestAnimationFrame(scrollToBottom)
       })
@@ -245,12 +234,7 @@ export function ChatPage() {
     return () => {
       cancelled = true
     }
-    // driveConnected is included so that if Drive's own status check
-    // resolves shortly after this conversation's messages already loaded,
-    // driveHasMore still gets set correctly — at the cost of one redundant
-    // refetch of this same page on that (one-time, per conversation-open)
-    // transition.
-  }, [activeConversationId, token, scrollToBottom, driveConnected])
+  }, [activeConversationId, token, scrollToBottom])
 
   // Mark read whenever a thread is opened (or switched to).
   useEffect(() => {
@@ -429,31 +413,18 @@ export function ChatPage() {
     })
   }
 
-  // Postgres first, then — once it's exhausted — this account's own Drive
-  // archive for this conversation, using the oldest message currently on
-  // screen as the cursor either way. Both sources return the same
-  // {data, hasMore, nextBefore} shape, so the rest of this function doesn't
-  // need to know which one it just called.
   async function loadOlder() {
     if (loadingOlder || messagesLoading) return
-    const fromDrive = !hasMore
-    if (fromDrive && !driveHasMore) return
-    if (!fromDrive && nextBefore == null) return
+    if (!hasMore || nextBefore == null) return
 
     setLoadingOlder(true)
     const el = messagesElRef.current
     const prevScrollHeight = el?.scrollHeight ?? 0
     try {
-      const res = fromDrive
-        ? await listDriveHistory(activeConversationId, { before: messages[0]?.id, limit: MESSAGE_PAGE_SIZE }, token)
-        : await listMessages(activeConversationId, { before: nextBefore, limit: MESSAGE_PAGE_SIZE }, token)
+      const res = await listMessages(activeConversationId, { before: nextBefore, limit: MESSAGE_PAGE_SIZE }, token)
       setMessages((prev) => [...[...res.data].reverse(), ...prev])
-      if (fromDrive) {
-        setDriveHasMore(res.hasMore)
-      } else {
-        setHasMore(res.hasMore)
-        setNextBefore(res.nextBefore)
-      }
+      setHasMore(res.hasMore)
+      setNextBefore(res.nextBefore)
       setOlderLoadAnnouncement(t('chat.olderMessagesLoaded', { count: res.data.length }))
       requestAnimationFrame(() => {
         if (el) el.scrollTop = el.scrollHeight - prevScrollHeight
@@ -470,7 +441,7 @@ export function ChatPage() {
     if (!el) return
     const distanceFromBottom = el.scrollHeight - el.scrollTop - el.clientHeight
     isAtBottomRef.current = distanceFromBottom < SCROLL_BOTTOM_THRESHOLD
-    if (el.scrollTop < SCROLL_TOP_LOAD_THRESHOLD && (hasMore || driveHasMore) && !loadingOlder && !messagesLoading) {
+    if (el.scrollTop < SCROLL_TOP_LOAD_THRESHOLD && hasMore && !loadingOlder && !messagesLoading) {
       loadOlder()
     }
   }
@@ -748,11 +719,9 @@ export function ChatPage() {
                 ) : (
                   <>
                 {messagesError && <p className="error" role="alert">{messagesError}</p>}
-                {(hasMore || driveHasMore) && (
+                {hasMore && (
                   <button type="button" className="chat-load-more" onClick={loadOlder} disabled={loadingOlder}>
-                    {loadingOlder
-                      ? t(!hasMore && driveHasMore ? 'chat.loadingFromDrive' : 'common.loading')
-                      : t('chat.loadOlder')}
+                    {loadingOlder ? t('common.loading') : t('chat.loadOlder')}
                   </button>
                 )}
                 {messagesLoading ? (

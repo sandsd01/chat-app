@@ -34,15 +34,6 @@ export function searchMessages(conversationId, { q, ...opts } = {}, token) {
   return apiFetch(`/chat/conversations/${conversationId}/messages/search?${qs}`, { token })
 }
 
-// Falls back to the caller's own Google Drive archive once
-// GET /chat/conversations/:id/messages has run out of Postgres rows — see
-// CLAUDE.md. Same {data, hasMore, nextBefore} shape as listMessages, so
-// callers can treat a page from either source identically.
-export function listDriveHistory(conversationId, opts = {}, token) {
-  const qs = pagingQuery(opts)
-  return apiFetch(`/chat/conversations/${conversationId}/messages/drive-history${qs ? `?${qs}` : ''}`, { token })
-}
-
 export function sendMessage(conversationId, { body, attachmentKey, attachmentName } = {}, token) {
   return apiFetch(`/chat/conversations/${conversationId}/messages`, {
     method: 'POST',
