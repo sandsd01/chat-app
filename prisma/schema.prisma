@@ -24,6 +24,19 @@ model User {
   /// the randomly generated original.
   publicIdCustomized   Boolean   @default(false)
   name                 String?
+  /// A short free-text line shown under the display name wherever this user
+  /// appears (friends list, chat header). Deliberately capped short
+  /// (STATUS_MESSAGE_MAX_LENGTH in src/routes/users.js) — it's a mood/status
+  /// line, not a profile bio, and it renders inline next to a name.
+  /// Null and empty are the same thing to a reader; PATCH /api/users/me
+  /// normalises a blank string to null so there's only one "unset" state.
+  statusMessage        String?
+  /// R2 object key for this user's avatar, or null to fall back to the
+  /// initials badge the UI has always drawn. Only the key is stored — the
+  /// URL clients actually load is a short-lived presigned GET minted per
+  /// response (src/lib/attachments.js#createDownloadUrl), never a permanent
+  /// link, exactly like message attachments.
+  avatarKey            String?
   /// Nullable because a Google-only account never sets one — POST
   /// /auth/login must check for null before bcrypt.compare (comparing
   /// against null throws) and tell the caller to use Google instead.
@@ -73,6 +86,12 @@ model PushSubscription {
   endpoint  String   @unique @db.Text
   p256dh    String
   authKey   String
+  /// The subscribing browser's User-Agent, kept purely so GET
+  /// /api/push/subscriptions can label the rows ("Chrome on Windows")
+  /// well enough for someone to tell which device they're revoking.
+  /// Nullable: a client that sent no UA header still gets a working
+  /// subscription, just an unlabelled one.
+  userAgent String?  @db.Text
   createdAt DateTime @default(now())
 
   user User @relation(fields: [userId], references: [id])

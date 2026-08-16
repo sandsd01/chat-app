@@ -10,6 +10,7 @@ const { sendPasswordResetEmail, sendVerificationEmail } = require("../lib/email"
 const { captchaConfigured, siteKey: captchaSiteKey, verifyCaptcha } = require("../lib/captcha");
 const { createUserWithUniquePublicId } = require("../lib/publicId");
 const { createTicketStore } = require("../lib/ticketStore");
+const { toPublicUser } = require("../lib/publicUser");
 
 const router = express.Router();
 
@@ -38,6 +39,11 @@ function signToken(user) {
   return jwt.sign({ sub: user.id, email: user.email }, process.env.JWT_SECRET, { expiresIn: "8h" });
 }
 
+// The caller's view of their OWN account — a superset of
+// src/lib/publicUser.js's other-user shape (it adds things only you should
+// see about yourself, like whether your one-time custom-ID change is spent).
+// avatarUrl is filled in by callers that await publicUserWithAvatar below;
+// this stays synchronous because most call sites don't need the presign.
 function publicUser(user) {
   return {
     id: user.id,
@@ -45,9 +51,16 @@ function publicUser(user) {
     publicIdCustomized: user.publicIdCustomized,
     email: user.email,
     name: user.name,
+    statusMessage: user.statusMessage,
     emailVerifiedAt: user.emailVerifiedAt,
     hasPassword: Boolean(user.passwordHash),
   };
+}
+
+/** publicUser + a short-lived presigned avatar URL, for routes that return the full profile. */
+async function publicUserWithAvatar(user) {
+  const { avatarUrl } = await toPublicUser({ avatarKey: user.avatarKey });
+  return { ...publicUser(user), avatarUrl };
 }
 
 function appUrl() {
@@ -338,7 +351,7 @@ router.get("/me", authenticate, async (req, res) => {
   const user = await prisma.user.findUnique({ where: { id: req.user.id } });
   if (!user) return res.status(404).json({ error: "User not found" });
 
-  res.json({ ...publicUser(user), createdAt: user.createdAt });
+  res.json({ ...(await publicUserWithAvatar(user)), createdAt: user.createdAt });
 });
 
 router.post("/logout", (_req, res) => {

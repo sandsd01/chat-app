@@ -12,6 +12,16 @@ export function unsubscribePush(endpoint, token) {
   return apiFetch('/push/unsubscribe', { method: 'POST', body: { endpoint }, token })
 }
 
+// Every browser this account has enabled notifications in — unlike
+// unsubscribePush above, which can only ever act on the current one.
+export function listPushSubscriptions(token) {
+  return apiFetch('/push/subscriptions', { token })
+}
+
+export function deletePushSubscription(id, token) {
+  return apiFetch(`/push/subscriptions/${id}`, { method: 'DELETE', token })
+}
+
 // PushManager.subscribe wants the VAPID public key as a Uint8Array
 // (the raw applicationServerKey bytes), not the base64url string the
 // server hands back — this is the standard conversion for that.
