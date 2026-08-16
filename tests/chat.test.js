@@ -1010,6 +1010,81 @@ describe("Chat API", () => {
     });
   });
 
+  describe("POST /chat/conversations/:id/mute and /unmute", () => {
+    async function createConversation(token, userId) {
+      return request(app)
+        .post("/api/chat/conversations")
+        .set("Authorization", `Bearer ${token}`)
+        .send({ userId });
+    }
+
+    test("requires authentication", async () => {
+      const res = await request(app).post("/api/chat/conversations/1/mute").send({});
+      assert.equal(res.status, 401);
+    });
+
+    test("404 for a non-participant", async () => {
+      const conv = await createConversation(adminToken, staffUser.id);
+      const res = await request(app)
+        .post(`/api/chat/conversations/${conv.body.id}/mute`)
+        .set("Authorization", `Bearer ${otherToken}`)
+        .send({});
+      assert.equal(res.status, 404);
+    });
+
+    test("mutes only the caller's own side, reflected on GET /conversations, and unmute reverses it", async () => {
+      const conv = await createConversation(adminToken, staffUser.id);
+
+      const muteRes = await request(app)
+        .post(`/api/chat/conversations/${conv.body.id}/mute`)
+        .set("Authorization", `Bearer ${adminToken}`)
+        .send({});
+      assert.equal(muteRes.status, 200);
+      assert.deepEqual(muteRes.body, { conversationId: conv.body.id, muted: true });
+
+      const adminList = await request(app)
+        .get("/api/chat/conversations")
+        .set("Authorization", `Bearer ${adminToken}`);
+      assert.equal(adminList.body.find((c) => c.id === conv.body.id).muted, true);
+
+      // The other participant's own view is untouched — muting is per-side.
+      const staffList = await request(app)
+        .get("/api/chat/conversations")
+        .set("Authorization", `Bearer ${staffToken}`);
+      assert.equal(staffList.body.find((c) => c.id === conv.body.id).muted, false);
+
+      const unmuteRes = await request(app)
+        .post(`/api/chat/conversations/${conv.body.id}/unmute`)
+        .set("Authorization", `Bearer ${adminToken}`)
+        .send({});
+      assert.equal(unmuteRes.status, 200);
+      assert.deepEqual(unmuteRes.body, { conversationId: conv.body.id, muted: false });
+
+      const afterList = await request(app)
+        .get("/api/chat/conversations")
+        .set("Authorization", `Bearer ${adminToken}`);
+      assert.equal(afterList.body.find((c) => c.id === conv.body.id).muted, false);
+    });
+
+    test("muting doesn't affect the live SSE message event, only the push-notification path", async () => {
+      const conv = await createConversation(adminToken, staffUser.id);
+      await request(app)
+        .post(`/api/chat/conversations/${conv.body.id}/mute`)
+        .set("Authorization", `Bearer ${adminToken}`)
+        .send({});
+
+      const adminWaiter = waitForEvent(adminUser.id, "message");
+      const res = await request(app)
+        .post(`/api/chat/conversations/${conv.body.id}/messages`)
+        .set("Authorization", `Bearer ${staffToken}`)
+        .send({ body: "hi despite mute" });
+      assert.equal(res.status, 201);
+
+      const payload = await adminWaiter;
+      assert.equal(payload.body, "hi despite mute");
+    });
+  });
+
   describe("POST /chat/conversations/:id/typing", () => {
     async function createConversation(token, userId) {
       return request(app)

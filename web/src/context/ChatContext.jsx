@@ -1,6 +1,13 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react'
 import { useAuth } from './AuthContext'
-import { listConversations, startConversation, markRead as markReadApi, getStreamTicket } from '../api/chat'
+import {
+  listConversations,
+  startConversation,
+  markRead as markReadApi,
+  muteConversation as muteConversationApi,
+  unmuteConversation as unmuteConversationApi,
+  getStreamTicket,
+} from '../api/chat'
 
 const ChatContext = createContext(null)
 
@@ -293,6 +300,19 @@ export function ChatProvider({ children }) {
     [token]
   )
 
+  const setConversationMuted = useCallback(
+    async (conversationId, muted) => {
+      setConversations((prev) => prev.map((c) => (c.id === conversationId ? { ...c, muted } : c)))
+      try {
+        await (muted ? muteConversationApi : unmuteConversationApi)(conversationId, token)
+      } catch {
+        // Best-effort, same as markConversationRead above — a failed toggle
+        // just means the setting reverts on the next full refresh.
+      }
+    },
+    [token]
+  )
+
   const startChat = useCallback(
     async (userId) => {
       const summary = await startConversation(userId, token)
@@ -331,6 +351,7 @@ export function ChatProvider({ children }) {
       subscribeToReactionRemoved,
       subscribeToFriendEvents,
       markConversationRead,
+      setConversationMuted,
       startChat,
     }),
     [
@@ -348,6 +369,7 @@ export function ChatProvider({ children }) {
       subscribeToReactionRemoved,
       subscribeToFriendEvents,
       markConversationRead,
+      setConversationMuted,
       startChat,
     ]
   )

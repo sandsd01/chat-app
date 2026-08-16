@@ -134,6 +134,14 @@ model Conversation {
   lastMessageAt   DateTime?
   userALastReadAt DateTime?
   userBLastReadAt DateTime?
+  /// Per-participant mute: same dual-column shape as userA/BLastReadAt
+  /// above, for the same reason — a reader only ever writes their own
+  /// column. Muting only suppresses the push notification a new message
+  /// would otherwise trigger (src/routes/chat.js's POST .../messages); it
+  /// never affects the SSE "message" event, so an open tab still updates
+  /// live.
+  userAMuted      Boolean   @default(false)
+  userBMuted      Boolean   @default(false)
   createdAt       DateTime  @default(now())
 
   userA             User               @relation("ConversationUserA", fields: [userAId], references: [id])

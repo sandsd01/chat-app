@@ -1024,7 +1024,8 @@ label {
    (#fff) from the base button rule, which on this --bg-raised header is
    white-on-white — invisible to anything but a colour emoji, which ignores
    `color` entirely. Same fix applies to every transparent button below. */
-.chat-thread-search-btn {
+.chat-thread-search-btn,
+.chat-thread-mute-btn {
   flex-shrink: 0;
   min-width: var(--tap);
   min-height: var(--tap);
@@ -1036,7 +1037,8 @@ label {
   font-size: 16px;
 }
 
-.chat-thread-search-btn:hover:not(:disabled) {
+.chat-thread-search-btn:hover:not(:disabled),
+.chat-thread-mute-btn:hover:not(:disabled) {
   background: var(--bg-subtle);
   color: var(--accent);
 }

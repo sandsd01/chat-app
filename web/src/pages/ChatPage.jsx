@@ -68,6 +68,7 @@ export function ChatPage() {
     subscribeToReactionAdded,
     subscribeToReactionRemoved,
     markConversationRead,
+    setConversationMuted,
     startChat,
   } = useChat()
   const { friends } = useFriends()
@@ -669,6 +670,17 @@ export function ChatPage() {
                 <span className="chat-avatar sm">{initials(threadHeaderName)}</span>
                 <span className="chat-thread-header-name">{threadHeaderName}</span>
                 <span className="chat-thread-header-spacer" />
+                {activeConversation && (
+                  <button
+                    type="button"
+                    className="chat-thread-mute-btn"
+                    aria-label={t(activeConversation.muted ? 'chat.unmute' : 'chat.mute')}
+                    aria-pressed={activeConversation.muted}
+                    onClick={() => setConversationMuted(activeConversation.id, !activeConversation.muted)}
+                  >
+                    {activeConversation.muted ? '🔕' : '🔔'}
+                  </button>
+                )}
                 <button
                   type="button"
                   className="chat-thread-search-btn"

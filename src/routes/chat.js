@@ -145,6 +145,9 @@ function conversationSummary(conversation, meId) {
     // message once it's at or before this. No new column: this is exactly
     // the field POST .../read already writes for whichever side isn't `me`.
     otherLastReadAt: isUserA ? conversation.userBLastReadAt : conversation.userALastReadAt,
+    // The CALLER's own mute state — every consumer of this summary is
+    // reading it as "do I have this muted," never the other side's.
+    muted: isUserA ? conversation.userAMuted : conversation.userBMuted,
   };
 }
 
@@ -436,7 +439,8 @@ router.post("/conversations/:id/messages", async (req, res) => {
   // sender-name lookup on the (much more common) both-online path. Fired
   // without awaiting: a slow or failing push must never delay the response
   // the sender is waiting on.
-  if (!chatBus.hasSubscribers(otherUserId)) {
+  const otherMuted = otherUserId === conversation.userAId ? conversation.userAMuted : conversation.userBMuted;
+  if (!chatBus.hasSubscribers(otherUserId) && !otherMuted) {
     prisma.user
       .findUnique({ where: { id: req.user.id }, select: { name: true, email: true } })
       .then((sender) => {
@@ -660,6 +664,33 @@ router.post("/conversations/:id/read", async (req, res) => {
   chatBus.publish(otherUserId, "read", { conversationId: updated.id, readerId: req.user.id, lastReadAt });
 
   res.json({ conversationId: updated.id, lastReadAt });
+});
+
+// Muting only suppresses the push notification a new message would
+// otherwise trigger (see the push-gating in POST .../messages below) — it
+// never touches the SSE "message" event, so an open tab keeps updating
+// live either way. Purely the caller's own setting: nothing published to
+// the other participant, unlike /read.
+async function setMuted(conversationId, userId, muted) {
+  const conversation = await getConversationForParticipant(conversationId, userId);
+  if (!conversation) return null;
+  const isUserA = conversation.userAId === userId;
+  return prisma.conversation.update({
+    where: { id: conversationId },
+    data: isUserA ? { userAMuted: muted } : { userBMuted: muted },
+  });
+}
+
+router.post("/conversations/:id/mute", async (req, res) => {
+  const updated = await setMuted(Number(req.params.id), req.user.id, true);
+  if (!updated) return res.status(404).json({ error: "Conversation not found" });
+  res.json({ conversationId: updated.id, muted: true });
+});
+
+router.post("/conversations/:id/unmute", async (req, res) => {
+  const updated = await setMuted(Number(req.params.id), req.user.id, false);
+  if (!updated) return res.status(404).json({ error: "Conversation not found" });
+  res.json({ conversationId: updated.id, muted: false });
 });
 
 router.post("/stream-ticket", (req, res) => {

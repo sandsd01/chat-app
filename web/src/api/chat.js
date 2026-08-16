@@ -99,6 +99,14 @@ export function markRead(conversationId, token) {
   return apiFetch(`/chat/conversations/${conversationId}/read`, { method: 'POST', token })
 }
 
+export function muteConversation(conversationId, token) {
+  return apiFetch(`/chat/conversations/${conversationId}/mute`, { method: 'POST', token })
+}
+
+export function unmuteConversation(conversationId, token) {
+  return apiFetch(`/chat/conversations/${conversationId}/unmute`, { method: 'POST', token })
+}
+
 export function sendTyping(conversationId, token) {
   return apiFetch(`/chat/conversations/${conversationId}/typing`, { method: 'POST', token })
 }
