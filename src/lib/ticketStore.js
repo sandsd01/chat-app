@@ -1,10 +1,10 @@
 const crypto = require("crypto");
 
 // Single-use, in-memory token store shared by every "can't send a real JWT
-// here" spot in this app (the SSE stream ticket, the Google-login ticket,
-// the Drive-connect OAuth state) — see CLAUDE.md for why each of those needs
-// one. In-process only, same single-instance caveat as chatBus: this doesn't
-// survive a restart or fan out across more than one server instance.
+// here" spot in this app (the SSE stream ticket and the Google-login
+// ticket) — see CLAUDE.md for why each of those needs one. In-process only,
+// same single-instance caveat as chatBus: this doesn't survive a restart or
+// fan out across more than one server instance.
 function createTicketStore(ttlMs) {
   const store = new Map(); // token -> { payload, expiresAt }
 

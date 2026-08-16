@@ -5,12 +5,10 @@ account's short public ID, then message them, with messages delivered live over
 Server-Sent Events (SSE).
 
 This is phase 5: email+password accounts (self-signup) or Google sign-in, the
-add-by-ID friend system that gates who can message whom, the app is
+add-by-ID friend system that gates who can message whom, and the app is
 installable (PWA) with Web Push notifications for messages that arrive while
-it isn't open, and messages can be backed up to each user's own Google
-Drive, with the server pruning its own copy once both sides of a
-conversation have archived it. See `CLAUDE.md` for the architectural
-reasoning behind what's here.
+it isn't open. See `CLAUDE.md` for the architectural reasoning behind what's
+here.
 
 ## Stack
 
@@ -95,7 +93,6 @@ a conversation or send them a message.
 | GET | `/api/chat/conversations` | required | Your own conversations, most recently active first |
 | POST | `/api/chat/conversations` | required | Find-or-create a 1:1 conversation with `{ userId }` — `403` if you're not friends, `201` new, `200` existing |
 | GET | `/api/chat/conversations/:id/messages?before=&limit=` | required | Newest-first page of messages, `{ data, hasMore, nextBefore }` |
-| GET | `/api/chat/conversations/:id/messages/drive-history?before=&limit=` | required | Same shape, but reads from *your own* Google Drive archive — the fallback once Postgres has nothing older left (see Google Drive backup below); an empty page (never an error) if Drive isn't connected or this conversation was never archived |
 | POST | `/api/chat/conversations/:id/messages` | required | Send a message (`{ body }`, 1–4000 characters) — `403` if you're no longer friends with the other participant |
 | POST | `/api/chat/conversations/:id/read` | required | Mark the conversation read up to now |
 | POST | `/api/chat/stream-ticket` | required | Mint a single-use, 30-second ticket for the SSE stream below |
@@ -104,10 +101,7 @@ a conversation or send them a message.
 A conversation is visible only to its two participants — every `/api/chat/conversations/:id/*`
 route answers `404` (not `403`) to anyone else, and there is no override for reading
 someone else's messages. Message history stays readable after unfriending; only
-sending new messages is blocked. History that's been pruned from the server (see
-below) is still readable through the same "load older messages" scrolling — the
-chat UI falls back to `drive-history` transparently once the regular page runs out,
-for anyone with Drive backup connected.
+sending new messages is blocked.
 
 ### Push notifications
 
@@ -124,30 +118,6 @@ fallback for "not connected right now," not a mirror of every SSE event; see
 `CLAUDE.md` for the reasoning and for why friend-request notifications work
 slightly differently.
 
-### Google Drive backup
-
-| Method | Path | Auth | Description |
-|---|---|---|---|
-| GET | `/api/drive/status` | required | Whether the caller has connected Google Drive, and since when |
-| POST | `/api/drive/connect/start` | required | Returns `{ url }`, a Google consent URL to redirect the browser to; `503` if not configured |
-| GET | `/api/drive/connect/callback` | — | Google redirects the browser back here; on success redirects to `${APP_URL}/account?drive=connected`, on failure to `${APP_URL}/account?driveError=` |
-| POST | `/api/drive/disconnect` | required | Revoke and forget the stored token; clears this user's archive-tracking rows (their already-archived files in their own Drive are untouched) |
-| POST | `/api/drive/sync` | required | Archive this user's new messages to Drive right now (normally runs automatically on `DRIVE_SYNC_CRON`), returns `{ messagesArchived, filesUpdated }`; `400` if not connected |
-
-Connecting is a separate consent flow from Google sign-in (a different scope
-and a different redirect URI — see `.env.example`), because backup needs
-*offline* access (a refresh token the server can use later, unattended)
-where sign-in only ever needs an online, one-time grant. Once connected, the
-server periodically archives each new message into a JSONL file per
-conversation inside a "Chat Backups" folder in that user's own Drive, and
-deletes a message from its own database only once **every** participant of
-that conversation has archived past it — a conversation where the other
-side never connects Drive simply never gets pruned. Pruned history is still
-reachable in the chat UI itself: scrolling up past what Postgres has left
-transparently falls back to `GET .../messages/drive-history` (see the Chat
-routes table above), reading it straight out of the connected user's own
-Drive file. See `CLAUDE.md` for the full reasoning.
-
 ## Environment variables
 
 See `.env.example` for the full list with explanations. `DATABASE_URL` and
@@ -163,19 +133,6 @@ either way. `GOOGLE_REDIRECT_URI` must match one of the OAuth client's
 "Authorized redirect URIs" in Google Cloud Console *exactly*, and while the
 consent screen is in Testing mode, only accounts explicitly added as test
 users can complete sign-in.
-
-## Google Drive backup
-
-Optional, and independent of Google sign-in above (a user can sign in with
-email+password and still connect Drive backup, or vice versa). Reuses the
-same `GOOGLE_CLIENT_ID`/`GOOGLE_CLIENT_SECRET`, but needs its own
-`DRIVE_REDIRECT_URI` registered as a separate "Authorized redirect URI" in
-Google Cloud Console, plus a `TOKEN_ENCRYPTION_KEY` (see `.env.example` for
-how to generate one) to encrypt the Drive refresh token at rest — without
-all three set, `POST /api/drive/connect/start` and `POST /api/drive/sync`
-`503` and the Account page's "Google Drive backup" section stays in its
-disconnected state. `DRIVE_SYNC_CRON` controls how often the server sweeps
-connected users' new messages into Drive (default every 15 minutes).
 
 ## PWA
 

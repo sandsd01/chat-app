@@ -1,7 +1,6 @@
 // Loads Cloudflare Turnstile's own script and drives its vanilla JS widget
 // API directly, rather than adding an npm wrapper package for what's a
-// handful of calls — same reasoning as src/lib/drive.js talking to the
-// Drive REST API straight over fetch instead of pulling in `googleapis`.
+// handful of calls.
 const SCRIPT_SRC = 'https://challenges.cloudflare.com/turnstile/v0/api.js'
 
 let loadPromise = null

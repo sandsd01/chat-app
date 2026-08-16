@@ -1,7 +1,7 @@
 {
   "name": "chat-app",
   "version": "1.0.0",
-  "description": "1:1 direct messaging — Google sign-in, add-by-ID friends, live delivery, PWA push, per-user Google Drive archive.",
+  "description": "1:1 direct messaging — Google sign-in, add-by-ID friends, live delivery, PWA push.",
   "main": "src/server.js",
   "scripts": {
     "postinstall": "prisma generate",
@@ -35,7 +35,6 @@
     "google-auth-library": "^11.0.1",
     "helmet": "^8.3.0",
     "jsonwebtoken": "^9.0.3",
-    "node-cron": "^4.6.0",
     "pg": "^8.23.0",
     "prisma": "^7.9.1",
     "resend": "^6.18.0",

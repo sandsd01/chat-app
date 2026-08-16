@@ -47,17 +47,6 @@ model User {
   emailVerifiedAt      DateTime?
   verifyTokenHash      String?
   verifyTokenExpiresAt DateTime?
-  /// Encrypted (AES-256-GCM, key from TOKEN_ENCRYPTION_KEY) Google OAuth
-  /// refresh token for the drive.file scope, set only once the user opts
-  /// into Drive backup (src/routes/drive.js) — separate from sign-in, which
-  /// only ever gets an online (non-refreshable) grant. A refresh token is a
-  /// long-lived credential, so it is never stored in plaintext.
-  driveRefreshTokenEnc String?   @db.Text
-  driveConnectedAt     DateTime?
-  /// The id of the "Chat Backups" folder this app created in the user's own
-  /// Drive (drive.file scope only sees files/folders the app itself
-  /// created), cached so every sync doesn't have to search for it again.
-  driveFolderId        String?
   createdAt            DateTime  @default(now())
 
   conversationsAsUserA Conversation[]     @relation("ConversationUserA")
@@ -67,7 +56,6 @@ model User {
   friendshipsAsUserB   Friendship[]       @relation("FriendshipUserB")
   sentFriendRequests   Friendship[]       @relation("FriendshipRequestedBy")
   pushSubscriptions    PushSubscription[]
-  driveArchiveFiles    DriveArchiveFile[]
   messageReactions     MessageReaction[]
 
   @@map("users")
@@ -144,10 +132,9 @@ model Conversation {
   userBMuted      Boolean   @default(false)
   createdAt       DateTime  @default(now())
 
-  userA             User               @relation("ConversationUserA", fields: [userAId], references: [id])
-  userB             User               @relation("ConversationUserB", fields: [userBId], references: [id])
-  messages          Message[]
-  driveArchiveFiles DriveArchiveFile[]
+  userA    User      @relation("ConversationUserA", fields: [userAId], references: [id])
+  userB    User      @relation("ConversationUserB", fields: [userBId], references: [id])
+  messages Message[]
 
   @@unique([userAId, userBId])
   @@map("conversations")
@@ -194,10 +181,9 @@ model Message {
 /// what makes POST .../reactions an idempotent add (react twice with the
 /// same emoji and nothing changes) while still letting the same user react
 /// to the same message with several different emoji. onDelete: Cascade on
-/// `message` matters here specifically because src/lib/drive.js's
-/// pruneArchivedMessages hard-deletes old Message rows once every
-/// participant has archived them — without cascade, a reacted-to message
-/// would fail to prune with a foreign key violation.
+/// `message` is kept as a safety net: deleting a message is a soft delete
+/// today (Message.deletedAt), so nothing hard-deletes a reacted-to row, but
+/// any future path that does would otherwise hit a foreign key violation.
 model MessageReaction {
   id        Int      @id @default(autoincrement())
   messageId Int
@@ -210,28 +196,4 @@ model MessageReaction {
 
   @@unique([messageId, userId, emoji])
   @@map("message_reactions")
-}
-
-/// One participant's own archive of one conversation, in their own Drive —
-/// there are up to two rows per conversation (one per participant), each
-/// pointing at a *different* Drive file in a *different* person's Drive,
-/// because drive.file only ever grants access to files the app created in
-/// that specific user's account. `lastArchivedMessageId` is this
-/// participant's watermark: src/lib/drive.js#pruneArchivedMessages only
-/// deletes a Message once every participant's row for that conversation has
-/// a watermark at or past it, so a message is never lost for someone who
-/// hasn't archived yet (or never connected Drive at all).
-model DriveArchiveFile {
-  id                    Int      @id @default(autoincrement())
-  userId                Int
-  conversationId        Int
-  driveFileId           String
-  lastArchivedMessageId Int      @default(0)
-  updatedAt             DateTime @updatedAt
-
-  user         User         @relation(fields: [userId], references: [id])
-  conversation Conversation @relation(fields: [conversationId], references: [id])
-
-  @@unique([userId, conversationId])
-  @@map("drive_archive_files")
 }
