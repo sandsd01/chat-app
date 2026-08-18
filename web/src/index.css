@@ -801,6 +801,23 @@ label {
   text-decoration: none;
 }
 
+/* .chat-conversation-row is now the outer div (padding/border/hover live
+   here), because the pin button needs to sit next to the link rather than
+   inside it — a <button> nested in an <a> is invalid HTML and confuses tab
+   order. .chat-conversation-link carries just the flex layout the row used
+   to have, unstyled otherwise, and min-width: 0 so its text can still
+   ellipsis-truncate inside a flex row (the default min-width: auto on a
+   flex item would let long names overflow instead). */
+.chat-conversation-link {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex: 1;
+  min-width: 0;
+  color: inherit;
+  text-decoration: none;
+}
+
 .chat-conversation-row:hover:not(:disabled),
 .chat-user-result:hover:not(:disabled) {
   background: var(--bg-subtle);
@@ -817,6 +834,43 @@ label {
 .chat-conversation-row.active:hover {
   background: var(--accent-soft);
   border-left-color: var(--accent-hover);
+}
+
+.chat-conversation-pin-btn {
+  flex-shrink: 0;
+  min-width: var(--tap-compact);
+  min-height: var(--tap-compact);
+  background: none;
+  border: none;
+  border-radius: var(--radius);
+  color: var(--text-muted);
+  cursor: pointer;
+  font-size: 15px;
+  /* Unpinned rows don't need a visible pin icon cluttering every row — it
+     appears on hover/focus (mouse or keyboard) and whenever this row's own
+     conversation is already pinned, so a pinned row's marker never
+     disappears just because the pointer moved away. */
+  opacity: 0;
+}
+
+.chat-conversation-row:hover .chat-conversation-pin-btn,
+.chat-conversation-pin-btn:focus-visible,
+.chat-conversation-pin-btn.pinned {
+  opacity: 1;
+}
+
+.chat-conversation-pin-btn:hover:not(:disabled) {
+  background: var(--bg-raised);
+  color: var(--accent);
+}
+
+.chat-conversation-pin-btn.pinned {
+  color: var(--accent);
+}
+
+.chat-muted-indicator {
+  flex-shrink: 0;
+  font-size: 13px;
 }
 
 .chat-avatar {

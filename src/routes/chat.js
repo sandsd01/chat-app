@@ -123,6 +123,15 @@ function parsePagingParams(req) {
   return { limit, before };
 }
 
+// The caller's own side of a pin/mute pair — never the other participant's,
+// since both are private per-user preferences the other side never sees.
+function myPinnedAt(conversation, meId) {
+  return conversation.userAId === meId ? conversation.userAPinnedAt : conversation.userBPinnedAt;
+}
+function myMutedAt(conversation, meId) {
+  return conversation.userAId === meId ? conversation.userAMutedAt : conversation.userBMutedAt;
+}
+
 function conversationSummary(conversation, meId) {
   const isUserA = conversation.userAId === meId;
   const otherUser = isUserA ? conversation.userB : conversation.userA;
@@ -136,6 +145,8 @@ function conversationSummary(conversation, meId) {
     // message once it's at or before this. No new column: this is exactly
     // the field POST .../read already writes for whichever side isn't `me`.
     otherLastReadAt: isUserA ? conversation.userBLastReadAt : conversation.userALastReadAt,
+    pinned: Boolean(myPinnedAt(conversation, meId)),
+    muted: Boolean(myMutedAt(conversation, meId)),
   };
 }
 
@@ -151,10 +162,17 @@ router.get("/conversations", async (req, res) => {
     },
   });
 
-  // lastMessageAt is only set once a conversation has a message; falling back
-  // to createdAt keeps a brand-new, still-empty conversation from sorting as
-  // if it were older than everything (it would otherwise compare as null).
+  // Pinned conversations sort first (most-recently-pinned first), then
+  // everything else by recency. lastMessageAt is only set once a
+  // conversation has a message; falling back to createdAt keeps a
+  // brand-new, still-empty conversation from sorting as if it were older
+  // than everything (it would otherwise compare as null).
   conversations.sort((a, b) => {
+    const aPinnedAt = myPinnedAt(a, meId);
+    const bPinnedAt = myPinnedAt(b, meId);
+    if (aPinnedAt && bPinnedAt) return bPinnedAt.getTime() - aPinnedAt.getTime();
+    if (aPinnedAt) return -1;
+    if (bPinnedAt) return 1;
     const aTime = (a.lastMessageAt ?? a.createdAt).getTime();
     const bTime = (b.lastMessageAt ?? b.createdAt).getTime();
     return bTime - aTime;
@@ -443,10 +461,13 @@ router.post("/conversations/:id/messages", async (req, res) => {
   // Push is the fallback for "not connected," not a duplicate of the SSE
   // event — skip it entirely when the recipient already has a live stream
   // open, both to avoid a redundant OS notification and to avoid the extra
-  // sender-name lookup on the (much more common) both-online path. Fired
-  // without awaiting: a slow or failing push must never delay the response
-  // the sender is waiting on.
-  if (!chatBus.hasSubscribers(otherUserId)) {
+  // sender-name lookup on the (much more common) both-online path. Also
+  // skipped when the recipient muted this conversation — muting only ever
+  // silences their own push, never the SSE-delivered message or unread
+  // count, so this check has no effect on anything above. Fired without
+  // awaiting: a slow or failing push must never delay the response the
+  // sender is waiting on.
+  if (!chatBus.hasSubscribers(otherUserId) && !myMutedAt(conversation, otherUserId)) {
     prisma.user
       .findUnique({ where: { id: req.user.id }, select: { name: true, email: true } })
       .then((sender) => {
@@ -673,6 +694,61 @@ router.post("/conversations/:id/read", async (req, res) => {
   chatBus.publish(otherUserId, "read", { conversationId: updated.id, readerId: req.user.id, lastReadAt });
 
   res.json({ conversationId: updated.id, lastReadAt });
+});
+
+// Pin and mute are both purely private, per-user preferences — unlike read
+// receipts and typing, the other participant is never told about either one,
+// so there's no chatBus.publish here.
+router.post("/conversations/:id/pin", async (req, res) => {
+  const conversationId = Number(req.params.id);
+  const conversation = await getConversationForParticipant(conversationId, req.user.id);
+  if (!conversation) return res.status(404).json({ error: "Conversation not found" });
+
+  const isUserA = conversation.userAId === req.user.id;
+  await prisma.conversation.update({
+    where: { id: conversationId },
+    data: isUserA ? { userAPinnedAt: new Date() } : { userBPinnedAt: new Date() },
+  });
+  res.status(204).end();
+});
+
+router.delete("/conversations/:id/pin", async (req, res) => {
+  const conversationId = Number(req.params.id);
+  const conversation = await getConversationForParticipant(conversationId, req.user.id);
+  if (!conversation) return res.status(404).json({ error: "Conversation not found" });
+
+  const isUserA = conversation.userAId === req.user.id;
+  await prisma.conversation.update({
+    where: { id: conversationId },
+    data: isUserA ? { userAPinnedAt: null } : { userBPinnedAt: null },
+  });
+  res.status(204).end();
+});
+
+router.post("/conversations/:id/mute", async (req, res) => {
+  const conversationId = Number(req.params.id);
+  const conversation = await getConversationForParticipant(conversationId, req.user.id);
+  if (!conversation) return res.status(404).json({ error: "Conversation not found" });
+
+  const isUserA = conversation.userAId === req.user.id;
+  await prisma.conversation.update({
+    where: { id: conversationId },
+    data: isUserA ? { userAMutedAt: new Date() } : { userBMutedAt: new Date() },
+  });
+  res.status(204).end();
+});
+
+router.delete("/conversations/:id/mute", async (req, res) => {
+  const conversationId = Number(req.params.id);
+  const conversation = await getConversationForParticipant(conversationId, req.user.id);
+  if (!conversation) return res.status(404).json({ error: "Conversation not found" });
+
+  const isUserA = conversation.userAId === req.user.id;
+  await prisma.conversation.update({
+    where: { id: conversationId },
+    data: isUserA ? { userAMutedAt: null } : { userBMutedAt: null },
+  });
+  res.status(204).end();
 });
 
 router.post("/stream-ticket", (req, res) => {

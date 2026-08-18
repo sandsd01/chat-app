@@ -1046,6 +1046,138 @@ describe("Chat API", () => {
     });
   });
 
+  describe("POST/DELETE /chat/conversations/:id/pin", () => {
+    async function createConversation(token, userId) {
+      return request(app)
+        .post("/api/chat/conversations")
+        .set("Authorization", `Bearer ${token}`)
+        .send({ userId });
+    }
+
+    test("requires authentication", async () => {
+      const res = await request(app).post("/api/chat/conversations/1/pin").send({});
+      assert.equal(res.status, 401);
+    });
+
+    test("404 for a non-participant", async () => {
+      const conv = await createConversation(adminToken, staffUser.id);
+      const res = await request(app)
+        .post(`/api/chat/conversations/${conv.body.id}/pin`)
+        .set("Authorization", `Bearer ${otherToken}`)
+        .send({});
+      assert.equal(res.status, 404);
+    });
+
+    test("pins for the caller only, sorts pinned conversations first, and unpin restores normal ordering", async () => {
+      const convStaff = await createConversation(adminToken, staffUser.id);
+      const convOther = await createConversation(adminToken, otherUser.id);
+
+      // Give convOther a more recent message so it would normally sort above
+      // convStaff — pinning convStaff should override that.
+      await request(app)
+        .post(`/api/chat/conversations/${convOther.body.id}/messages`)
+        .set("Authorization", `Bearer ${otherToken}`)
+        .send({ body: "hi" });
+
+      const pinRes = await request(app)
+        .post(`/api/chat/conversations/${convStaff.body.id}/pin`)
+        .set("Authorization", `Bearer ${adminToken}`)
+        .send({});
+      assert.equal(pinRes.status, 204);
+
+      const list = await request(app).get("/api/chat/conversations").set("Authorization", `Bearer ${adminToken}`);
+      assert.equal(list.body[0].id, convStaff.body.id, "pinned conversation must sort first");
+      assert.equal(list.body[0].pinned, true);
+      assert.equal(list.body[1].pinned, false);
+
+      // The other participant never sees it as pinned — this is per-side, not shared.
+      const staffList = await request(app)
+        .get("/api/chat/conversations")
+        .set("Authorization", `Bearer ${staffToken}`);
+      assert.equal(staffList.body.find((c) => c.id === convStaff.body.id).pinned, false);
+
+      const unpinRes = await request(app)
+        .delete(`/api/chat/conversations/${convStaff.body.id}/pin`)
+        .set("Authorization", `Bearer ${adminToken}`);
+      assert.equal(unpinRes.status, 204);
+
+      const afterList = await request(app)
+        .get("/api/chat/conversations")
+        .set("Authorization", `Bearer ${adminToken}`);
+      assert.equal(afterList.body[0].id, convOther.body.id, "unpinning restores recency ordering");
+      assert.equal(afterList.body.find((c) => c.id === convStaff.body.id).pinned, false);
+    });
+  });
+
+  describe("POST/DELETE /chat/conversations/:id/mute", () => {
+    async function createConversation(token, userId) {
+      return request(app)
+        .post("/api/chat/conversations")
+        .set("Authorization", `Bearer ${token}`)
+        .send({ userId });
+    }
+
+    test("requires authentication", async () => {
+      const res = await request(app).post("/api/chat/conversations/1/mute").send({});
+      assert.equal(res.status, 401);
+    });
+
+    test("404 for a non-participant", async () => {
+      const conv = await createConversation(adminToken, staffUser.id);
+      const res = await request(app)
+        .post(`/api/chat/conversations/${conv.body.id}/mute`)
+        .set("Authorization", `Bearer ${otherToken}`)
+        .send({});
+      assert.equal(res.status, 404);
+    });
+
+    test("mutes for the caller only, reported back on the list, and unmute clears it", async () => {
+      const conv = await createConversation(adminToken, staffUser.id);
+
+      const muteRes = await request(app)
+        .post(`/api/chat/conversations/${conv.body.id}/mute`)
+        .set("Authorization", `Bearer ${adminToken}`)
+        .send({});
+      assert.equal(muteRes.status, 204);
+
+      const adminList = await request(app).get("/api/chat/conversations").set("Authorization", `Bearer ${adminToken}`);
+      assert.equal(adminList.body.find((c) => c.id === conv.body.id).muted, true);
+
+      const staffList = await request(app).get("/api/chat/conversations").set("Authorization", `Bearer ${staffToken}`);
+      assert.equal(staffList.body.find((c) => c.id === conv.body.id).muted, false);
+
+      const unmuteRes = await request(app)
+        .delete(`/api/chat/conversations/${conv.body.id}/mute`)
+        .set("Authorization", `Bearer ${adminToken}`);
+      assert.equal(unmuteRes.status, 204);
+
+      const afterList = await request(app).get("/api/chat/conversations").set("Authorization", `Bearer ${adminToken}`);
+      assert.equal(afterList.body.find((c) => c.id === conv.body.id).muted, false);
+    });
+
+    test("muting a conversation doesn't affect SSE delivery or unread count (it only ever gates push, see src/routes/chat.js)", async () => {
+      const conv = await createConversation(adminToken, staffUser.id);
+      await request(app)
+        .post(`/api/chat/conversations/${conv.body.id}/mute`)
+        .set("Authorization", `Bearer ${adminToken}`)
+        .send({});
+
+      const adminWaiter = waitForEvent(adminUser.id, "message");
+      const sendRes = await request(app)
+        .post(`/api/chat/conversations/${conv.body.id}/messages`)
+        .set("Authorization", `Bearer ${staffToken}`)
+        .send({ body: "hi muted admin" });
+      assert.equal(sendRes.status, 201);
+
+      // Still delivered live over SSE — muting only silences push.
+      const ssePayload = await adminWaiter;
+      assert.equal(ssePayload.body, "hi muted admin");
+
+      const adminList = await request(app).get("/api/chat/conversations").set("Authorization", `Bearer ${adminToken}`);
+      assert.equal(adminList.body.find((c) => c.id === conv.body.id).unreadCount, 1, "unread count is unaffected by muting");
+    });
+  });
+
   describe("POST /chat/conversations/:id/typing", () => {
     async function createConversation(token, userId) {
       return request(app)

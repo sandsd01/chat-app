@@ -103,6 +103,22 @@ export function sendTyping(conversationId, token) {
   return apiFetch(`/chat/conversations/${conversationId}/typing`, { method: 'POST', token })
 }
 
+export function pinConversation(conversationId, token) {
+  return apiFetch(`/chat/conversations/${conversationId}/pin`, { method: 'POST', token })
+}
+
+export function unpinConversation(conversationId, token) {
+  return apiFetch(`/chat/conversations/${conversationId}/pin`, { method: 'DELETE', token })
+}
+
+export function muteConversation(conversationId, token) {
+  return apiFetch(`/chat/conversations/${conversationId}/mute`, { method: 'POST', token })
+}
+
+export function unmuteConversation(conversationId, token) {
+  return apiFetch(`/chat/conversations/${conversationId}/mute`, { method: 'DELETE', token })
+}
+
 export function getStreamTicket(token) {
   return apiFetch('/chat/stream-ticket', { method: 'POST', token })
 }

@@ -134,6 +134,19 @@ model Conversation {
   lastMessageAt   DateTime?
   userALastReadAt DateTime?
   userBLastReadAt DateTime?
+  /// Null means "not pinned" — same never-set-is-null convention as
+  /// userALastReadAt above, rather than a boolean, so the pinned-first sort
+  /// in GET /conversations can order same-side pins by when they were
+  /// pinned (most recent pin first) for free.
+  userAPinnedAt   DateTime?
+  userBPinnedAt   DateTime?
+  /// Muting only ever silences this side's own Web Push notifications for
+  /// this conversation (checked in POST .../messages before sendPushToUser)
+  /// — it never affects the other participant, the SSE-delivered message
+  /// itself, or unread counts, so there's no "who muted whom" the other
+  /// side needs to be told about.
+  userAMutedAt    DateTime?
+  userBMutedAt    DateTime?
   createdAt       DateTime  @default(now())
 
   userA             User               @relation("ConversationUserA", fields: [userAId], references: [id])
@@ -173,10 +186,20 @@ model Message {
   /// message's content isn't kept around in any form, consistent with this
   /// app never logging message content elsewhere either.
   deletedAt          DateTime?
+  /// The message this one is replying to, if any — same conversation is
+  /// enforced in application code (POST .../messages), not by the FK alone.
+  /// No onDelete behavior needed: a reply survives its original being
+  /// soft-deleted (deletedAt set, body cleared) the same way every other
+  /// reference to a deleted message's id already does — the quoted preview
+  /// just renders the same "This message was deleted." text the bubble
+  /// itself would.
+  replyToId          Int?
 
   conversation Conversation      @relation(fields: [conversationId], references: [id])
   sender       User              @relation("MessageSender", fields: [senderId], references: [id])
   reactions    MessageReaction[]
+  replyTo      Message?          @relation("MessageReplyTo", fields: [replyToId], references: [id])
+  replies      Message[]         @relation("MessageReplyTo")
 
   @@index([conversationId, createdAt])
   @@map("messages")

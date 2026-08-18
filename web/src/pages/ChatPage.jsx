@@ -68,6 +68,8 @@ export function ChatPage() {
     subscribeToReactionAdded,
     subscribeToReactionRemoved,
     markConversationRead,
+    togglePin,
+    toggleMute,
     startChat,
   } = useChat()
   const { friends } = useFriends()
@@ -98,9 +100,13 @@ export function ChatPage() {
           const email = c.otherUser.email.toLowerCase()
           return name.includes(q) || email.includes(q)
         })
-    return [...list].sort(
-      (a, b) => new Date(b.lastMessageAt ?? b.createdAt) - new Date(a.lastMessageAt ?? a.createdAt)
-    )
+    // Pinned-first, matching GET /conversations' own sort — the list here is
+    // re-sorted after every optimistic update (e.g. searching), so it has to
+    // reapply the same rule rather than just trusting the fetch order.
+    return [...list].sort((a, b) => {
+      if (a.pinned !== b.pinned) return a.pinned ? -1 : 1
+      return new Date(b.lastMessageAt ?? b.createdAt) - new Date(a.lastMessageAt ?? a.createdAt)
+    })
   }, [conversations, query])
 
   const visibleFriends = useMemo(() => {
@@ -625,33 +631,54 @@ export function ChatPage() {
                 </div>
               )
             ) : (
-              filteredConversations.map((c) => {
+              filteredConversations.map((c, index) => {
                 const name = c.otherUser.name || c.otherUser.email
                 const unread = c.unreadCount > 0
+                // Only shown outside an active search — searching flattens
+                // the list to matches, where a "Pinned" divider would just
+                // be noise ahead of the thing being searched for.
+                const showPinnedLabel = !trimmedQuery && c.pinned && index === 0
                 return (
-                  <Link
-                    key={c.id}
-                    to={`/chat/${c.id}`}
-                    className={`chat-conversation-row${c.id === activeConversationId ? ' active' : ''}${
-                      unread ? ' unread' : ''
-                    }`}
-                  >
-                    <span className="chat-avatar">{initials(name)}</span>
-                    <span className="chat-conversation-main">
-                      <span className={`chat-conversation-name${unread ? ' unread' : ''}`}>{name}</span>
-                      <span className={`chat-conversation-preview${unread ? ' unread' : ''}`}>
-                        {c.lastMessage ? c.lastMessage.body : t('chat.startNewChat')}
-                      </span>
-                    </span>
-                    <span className="chat-conversation-meta">
-                      <span className="chat-timestamp">
-                        {formatListTimestamp(c.lastMessageAt ?? c.createdAt, language)}
-                      </span>
-                      {unread && (
-                        <span className="chat-unread-badge">{c.unreadCount > 99 ? '99+' : c.unreadCount}</span>
-                      )}
-                    </span>
-                  </Link>
+                  <div key={c.id}>
+                    {showPinnedLabel && <div className="chat-list-section-label">{t('chat.pinnedSection')}</div>}
+                    <div
+                      className={`chat-conversation-row${c.id === activeConversationId ? ' active' : ''}${
+                        unread ? ' unread' : ''
+                      }`}
+                    >
+                      <Link to={`/chat/${c.id}`} className="chat-conversation-link">
+                        <span className="chat-avatar">{initials(name)}</span>
+                        <span className="chat-conversation-main">
+                          <span className={`chat-conversation-name${unread ? ' unread' : ''}`}>{name}</span>
+                          <span className={`chat-conversation-preview${unread ? ' unread' : ''}`}>
+                            {c.lastMessage ? c.lastMessage.body : t('chat.startNewChat')}
+                          </span>
+                        </span>
+                        <span className="chat-conversation-meta">
+                          <span className="chat-timestamp">
+                            {formatListTimestamp(c.lastMessageAt ?? c.createdAt, language)}
+                          </span>
+                          {unread && (
+                            <span className="chat-unread-badge">{c.unreadCount > 99 ? '99+' : c.unreadCount}</span>
+                          )}
+                          {c.muted && (
+                            <span className="chat-muted-indicator" aria-label={t('chat.mutedIndicator')} title={t('chat.mutedIndicator')}>
+                              🔕
+                            </span>
+                          )}
+                        </span>
+                      </Link>
+                      <button
+                        type="button"
+                        className={`chat-conversation-pin-btn${c.pinned ? ' pinned' : ''}`}
+                        aria-label={c.pinned ? t('chat.unpin') : t('chat.pin')}
+                        aria-pressed={c.pinned}
+                        onClick={() => togglePin(c.id, !c.pinned)}
+                      >
+                        📌
+                      </button>
+                    </div>
+                  </div>
                 )
               })
             )}
@@ -678,6 +705,17 @@ export function ChatPage() {
                 <span className="chat-avatar sm">{initials(threadHeaderName)}</span>
                 <span className="chat-thread-header-name">{threadHeaderName}</span>
                 <span className="chat-thread-header-spacer" />
+                {activeConversation && (
+                  <button
+                    type="button"
+                    className="chat-thread-search-btn"
+                    aria-label={activeConversation.muted ? t('chat.unmute') : t('chat.mute')}
+                    aria-pressed={activeConversation.muted}
+                    onClick={() => toggleMute(activeConversation.id, !activeConversation.muted)}
+                  >
+                    {activeConversation.muted ? '🔕' : '🔔'}
+                  </button>
+                )}
                 <button
                   type="button"
                   className="chat-thread-search-btn"

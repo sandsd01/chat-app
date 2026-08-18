@@ -1,6 +1,15 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react'
 import { useAuth } from './AuthContext'
-import { listConversations, startConversation, markRead as markReadApi, getStreamTicket } from '../api/chat'
+import {
+  listConversations,
+  startConversation,
+  markRead as markReadApi,
+  getStreamTicket,
+  pinConversation as pinConversationApi,
+  unpinConversation as unpinConversationApi,
+  muteConversation as muteConversationApi,
+  unmuteConversation as unmuteConversationApi,
+} from '../api/chat'
 
 const ChatContext = createContext(null)
 
@@ -293,6 +302,36 @@ export function ChatProvider({ children }) {
     [token]
   )
 
+  const togglePin = useCallback(
+    async (conversationId, pinned) => {
+      // Optimistic flip so the pin icon responds immediately; a full
+      // refresh afterwards re-syncs ordering from the server (the only
+      // place pinned-first sorting is computed) rather than reimplementing
+      // that sort here too.
+      setConversations((prev) => prev.map((c) => (c.id === conversationId ? { ...c, pinned } : c)))
+      try {
+        await (pinned ? pinConversationApi(conversationId, token) : unpinConversationApi(conversationId, token))
+      } finally {
+        await refreshConversations()
+      }
+    },
+    [token, refreshConversations]
+  )
+
+  const toggleMute = useCallback(
+    async (conversationId, muted) => {
+      setConversations((prev) => prev.map((c) => (c.id === conversationId ? { ...c, muted } : c)))
+      try {
+        await (muted ? muteConversationApi(conversationId, token) : unmuteConversationApi(conversationId, token))
+      } catch {
+        // Non-critical — the icon may drift until the next full refresh,
+        // same tolerance markConversationRead already has for unreadCount.
+        setConversations((prev) => prev.map((c) => (c.id === conversationId ? { ...c, muted: !muted } : c)))
+      }
+    },
+    [token]
+  )
+
   const startChat = useCallback(
     async (userId) => {
       const summary = await startConversation(userId, token)
@@ -331,6 +370,8 @@ export function ChatProvider({ children }) {
       subscribeToReactionRemoved,
       subscribeToFriendEvents,
       markConversationRead,
+      togglePin,
+      toggleMute,
       startChat,
     }),
     [
@@ -348,6 +389,8 @@ export function ChatProvider({ children }) {
       subscribeToReactionRemoved,
       subscribeToFriendEvents,
       markConversationRead,
+      togglePin,
+      toggleMute,
       startChat,
     ]
   )
