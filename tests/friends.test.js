@@ -141,6 +141,29 @@ describe("Friends API", () => {
       assert.equal(count, 1, "no duplicate row for the same pair");
     });
 
+    test("two concurrent requests to the same target (e.g. a double-click) don't 500 and leave only one row", async () => {
+      const [first, second] = await Promise.all([
+        request(app)
+          .post("/api/friends/requests")
+          .set("Authorization", `Bearer ${aliceToken}`)
+          .send({ publicId: bob.publicId }),
+        request(app)
+          .post("/api/friends/requests")
+          .set("Authorization", `Bearer ${aliceToken}`)
+          .send({ publicId: bob.publicId }),
+      ]);
+
+      // Whether the loser reads the winner's row via the `existing` check
+      // (idempotent 200) or races `create` directly and catches P2002, both
+      // paths respond 200 — the race is made to look exactly like the
+      // already-tested sequential-duplicate case above.
+      const statuses = [first.status, second.status].sort();
+      assert.deepEqual(statuses, [200, 201]);
+
+      const count = await prisma.friendship.count();
+      assert.equal(count, 1, "no duplicate row for the same pair");
+    });
+
     test("a mutual request (B requests A back while A's request is still pending) auto-accepts", async () => {
       await request(app)
         .post("/api/friends/requests")
@@ -369,6 +392,19 @@ describe("Friends API", () => {
         .post(`/api/friends/${alice.id}/block`)
         .set("Authorization", `Bearer ${aliceToken}`);
       assert.equal(res.status, 400);
+    });
+
+    test("blocking a nonexistent userId 204s identically to blocking a real stranger, so the status code can't be used to enumerate accounts", async () => {
+      const realStranger = await request(app)
+        .post(`/api/friends/${carol.id}/block`)
+        .set("Authorization", `Bearer ${aliceToken}`);
+      const nonexistent = await request(app)
+        .post(`/api/friends/${carol.id + 999999}/block`)
+        .set("Authorization", `Bearer ${aliceToken}`);
+      assert.equal(realStranger.status, 204);
+      assert.equal(nonexistent.status, 204);
+      // Only the real account actually got a friendship row.
+      assert.equal(await prisma.friendship.count(), 1);
     });
   });
 

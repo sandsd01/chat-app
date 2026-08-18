@@ -133,9 +133,24 @@ router.post("/requests", requireVerifiedEmail, async (req, res) => {
   const existing = await prisma.friendship.findUnique({ where: { userAId_userBId: { userAId, userBId } } });
 
   if (!existing) {
-    const created = await prisma.friendship.create({
-      data: { userAId, userBId, status: "pending", requestedById: meId },
-    });
+    let created;
+    try {
+      created = await prisma.friendship.create({
+        data: { userAId, userBId, status: "pending", requestedById: meId },
+      });
+    } catch (err) {
+      // Two concurrent requests to the same target (e.g. a double-click) can
+      // both pass the `existing` read above and race on
+      // @@unique([userAId, userBId]) — P2002 means someone else's identical
+      // create just won. Read it back and respond the same way the
+      // idempotent-repeat branch below does, rather than error on what's
+      // really a duplicate of a request that already went through.
+      if (err.code === "P2002") {
+        const winner = await prisma.friendship.findUnique({ where: { userAId_userBId: { userAId, userBId } } });
+        return res.status(200).json({ requestId: winner.id, status: winner.status === "accepted" ? "accepted" : "pending" });
+      }
+      throw err;
+    }
     const me = await prisma.user.findUnique({ where: { id: meId }, select: { name: true, email: true } });
     notify(target.id, "New friend request", me.name || me.email);
     publishFriendEvent(target.id, "request_received");
@@ -155,10 +170,19 @@ router.post("/requests", requireVerifiedEmail, async (req, res) => {
   // They already requested us — the same "add each other" the two of you
   // just did in person accepts on the spot instead of leaving a request
   // each of you has to separately go tap Accept on.
-  const accepted = await prisma.friendship.update({
-    where: { id: existing.id },
-    data: { status: "accepted", respondedAt: new Date() },
-  });
+  let accepted;
+  try {
+    accepted = await prisma.friendship.update({
+      where: { id: existing.id },
+      data: { status: "accepted", respondedAt: new Date() },
+    });
+  } catch (err) {
+    // existing was read above, but the other side could cancel/decline
+    // their pending request in the gap before this update runs — same race
+    // class /requests/:id/accept already guards against.
+    if (err.code === "P2025") return res.status(409).json({ error: "This request was already handled" });
+    throw err;
+  }
   const me = await prisma.user.findUnique({ where: { id: meId }, select: { name: true, email: true } });
   notify(target.id, "Friend request accepted", `${me.name || me.email} accepted your request`);
   publishFriendEvent(target.id, "request_accepted");
@@ -256,15 +280,22 @@ router.post("/:userId/block", async (req, res) => {
   if (targetId === null) return;
   if (targetId === req.user.id) return res.status(400).json({ error: "You can't block yourself" });
 
+  // Same status regardless of whether targetId is a real account: an
+  // existence-revealing 404 here would let anyone loop userId=1,2,3,... and
+  // learn which ids are real accounts from the status code alone, exactly
+  // what publicId (see CLAUDE.md) exists to prevent. A nonexistent id is a
+  // harmless no-op — from the caller's side "block" always means "I won't
+  // hear from this id again", which is trivially true for one that doesn't
+  // exist.
   const target = await prisma.user.findUnique({ where: { id: targetId } });
-  if (!target) return res.status(404).json({ error: "User not found" });
-
-  const { userAId, userBId } = pair(req.user.id, targetId);
-  await prisma.friendship.upsert({
-    where: { userAId_userBId: { userAId, userBId } },
-    update: { status: "blocked", requestedById: req.user.id, respondedAt: new Date() },
-    create: { userAId, userBId, status: "blocked", requestedById: req.user.id },
-  });
+  if (target) {
+    const { userAId, userBId } = pair(req.user.id, targetId);
+    await prisma.friendship.upsert({
+      where: { userAId_userBId: { userAId, userBId } },
+      update: { status: "blocked", requestedById: req.user.id, respondedAt: new Date() },
+      create: { userAId, userBId, status: "blocked", requestedById: req.user.id },
+    });
+  }
   res.status(204).send();
 });
 

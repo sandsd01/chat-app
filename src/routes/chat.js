@@ -217,11 +217,15 @@ router.post("/conversations", async (req, res) => {
     return res.status(400).json({ error: "Cannot start a conversation with yourself" });
   }
 
-  const target = await prisma.user.findUnique({ where: { id: targetId } });
-  if (!target) return res.status(404).json({ error: "User not found" });
-
+  // A stranger's numeric id and a nonexistent one must look identical here —
+  // areFriends() is false either way (there's no friendship row referencing
+  // an id that doesn't exist), so this is one check, not "does the user
+  // exist" followed by "are we friends". Splitting those into a 404 then a
+  // 403 would let anyone loop userId=1,2,3,... and learn from the status
+  // code alone which ids are real accounts, exactly what publicId (see
+  // CLAUDE.md) exists to prevent — 404 either way instead.
   if (!(await areFriends(meId, targetId))) {
-    return res.status(403).json({ error: "You can only message accounts you're friends with" });
+    return res.status(404).json({ error: "You can only message accounts you're friends with" });
   }
 
   // Canonicalise the pair so the unique index gives us an idempotent
@@ -239,7 +243,21 @@ router.post("/conversations", async (req, res) => {
     return res.status(200).json(conversationSummary(existing, meId));
   }
 
-  const created = await prisma.conversation.create({ data: { userAId, userBId }, include });
+  let created;
+  try {
+    created = await prisma.conversation.create({ data: { userAId, userBId }, include });
+  } catch (err) {
+    // Two near-simultaneous POSTs for the same pair (e.g. a double-click, or
+    // both participants opening the thread at once) can both pass the
+    // findUnique above and race on @@unique([userAId, userBId]) — P2002
+    // means someone else's create just won, so read back the row it created
+    // rather than erroring on what's actually a successful outcome.
+    if (err.code === "P2002") {
+      const raced = await prisma.conversation.findUnique({ where: { userAId_userBId: { userAId, userBId } }, include });
+      return res.status(200).json(conversationSummary(raced, meId));
+    }
+    throw err;
+  }
   res.status(201).json(conversationSummary(created, meId));
 });
 
@@ -602,7 +620,17 @@ router.post("/conversations/:id/messages/:messageId/reactions", async (req, res)
     return res.status(200).json(payload);
   }
 
-  await prisma.messageReaction.create({ data: { messageId: message.id, userId: req.user.id, emoji } });
+  try {
+    await prisma.messageReaction.create({ data: { messageId: message.id, userId: req.user.id, emoji } });
+  } catch (err) {
+    // A double-tap (easy to trigger from a touch UI) can send two requests
+    // that both pass the `existing` check above and race on the same unique
+    // index this route is trying to keep idempotent — P2002 means someone
+    // else's identical reaction just won, so treat it like the
+    // already-reacted branch above (200, no re-publish) rather than 500ing.
+    if (err.code === "P2002") return res.status(200).json(payload);
+    throw err;
+  }
 
   chatBus.publish(conversation.userAId, "reaction-added", payload);
   chatBus.publish(conversation.userBId, "reaction-added", payload);

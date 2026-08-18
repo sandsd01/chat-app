@@ -76,13 +76,13 @@ describe("Chat API", () => {
   });
 
   describe("friend gating on POST /chat/conversations and sending", () => {
-    test("403s starting a conversation with a non-friend", async () => {
+    test("404s starting a conversation with a non-friend", async () => {
       const stranger = await createUser({ email: "stranger@test.com", password: "strangerpass1" });
       const res = await request(app)
         .post("/api/chat/conversations")
         .set("Authorization", `Bearer ${adminToken}`)
         .send({ userId: stranger.id });
-      assert.equal(res.status, 403);
+      assert.equal(res.status, 404);
     });
 
     test("a pending (not yet accepted) request does not satisfy the gate", async () => {
@@ -99,7 +99,22 @@ describe("Chat API", () => {
         .post("/api/chat/conversations")
         .set("Authorization", `Bearer ${adminToken}`)
         .send({ userId: stranger.id });
-      assert.equal(res.status, 403);
+      assert.equal(res.status, 404);
+    });
+
+    test("a nonexistent userId 404s identically to a real non-friend's id, so the status code can't be used to enumerate accounts", async () => {
+      const stranger = await createUser({ email: "stranger2@test.com", password: "strangerpass1" });
+      const nonFriend = await request(app)
+        .post("/api/chat/conversations")
+        .set("Authorization", `Bearer ${adminToken}`)
+        .send({ userId: stranger.id });
+      const nonexistent = await request(app)
+        .post("/api/chat/conversations")
+        .set("Authorization", `Bearer ${adminToken}`)
+        .send({ userId: stranger.id + 999999 });
+      assert.equal(nonFriend.status, 404);
+      assert.equal(nonexistent.status, 404);
+      assert.deepEqual(nonFriend.body, nonexistent.body);
     });
 
     test("unfriending after a conversation exists blocks new sends but not reading history", async () => {
@@ -211,6 +226,26 @@ describe("Chat API", () => {
       assert.equal(reverse.status, 200);
       assert.equal(reverse.body.id, created.body.id);
       assert.equal(reverse.body.otherUser.id, adminUser.id);
+
+      const count = await prisma.conversation.count();
+      assert.equal(count, 1, "only a single conversation row should exist for the pair");
+    });
+
+    test("two concurrent requests for the same new pair (e.g. a double-click) don't 500 and leave only one row", async () => {
+      const [first, second] = await Promise.all([
+        request(app)
+          .post("/api/chat/conversations")
+          .set("Authorization", `Bearer ${adminToken}`)
+          .send({ userId: staffUser.id }),
+        request(app)
+          .post("/api/chat/conversations")
+          .set("Authorization", `Bearer ${adminToken}`)
+          .send({ userId: staffUser.id }),
+      ]);
+
+      const statuses = [first.status, second.status].sort();
+      assert.deepEqual(statuses, [200, 201]);
+      assert.equal(first.body.id, second.body.id);
 
       const count = await prisma.conversation.count();
       assert.equal(count, 1, "only a single conversation row should exist for the pair");
@@ -805,6 +840,28 @@ describe("Chat API", () => {
         .send({ emoji: "👍" });
       assert.equal(second.status, 200);
       assert.ok((await noEventWaiter) instanceof Error, "a repeat react must not re-publish");
+
+      const rows = await prisma.messageReaction.findMany({ where: { messageId: msg.body.id } });
+      assert.equal(rows.length, 1, "must not create a duplicate row");
+    });
+
+    test("two concurrent adds of the same reaction (e.g. a double-tap) don't 500 and leave only one row", async () => {
+      const conv = await createConversation(adminToken, staffUser.id);
+      const msg = await sendMessage(adminToken, conv.body.id, "hi");
+
+      const [first, second] = await Promise.all([
+        request(app)
+          .post(`/api/chat/conversations/${conv.body.id}/messages/${msg.body.id}/reactions`)
+          .set("Authorization", `Bearer ${staffToken}`)
+          .send({ emoji: "👍" }),
+        request(app)
+          .post(`/api/chat/conversations/${conv.body.id}/messages/${msg.body.id}/reactions`)
+          .set("Authorization", `Bearer ${staffToken}`)
+          .send({ emoji: "👍" }),
+      ]);
+
+      const statuses = [first.status, second.status].sort();
+      assert.deepEqual(statuses, [200, 201]);
 
       const rows = await prisma.messageReaction.findMany({ where: { messageId: msg.body.id } });
       assert.equal(rows.length, 1, "must not create a duplicate row");
