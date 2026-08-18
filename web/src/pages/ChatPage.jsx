@@ -160,6 +160,10 @@ export function ChatPage() {
   const [draft, setDraft] = useState('')
   const [editingMessageId, setEditingMessageId] = useState(null)
   const [editingDraft, setEditingDraft] = useState('')
+  // Holds the message being quoted, not just its id — the composer banner
+  // needs to show who/what without a lookup, and the message stays
+  // available even if it scrolls out of the loaded page while replying.
+  const [replyingTo, setReplyingTo] = useState(null)
   const [emojiPickerOpen, setEmojiPickerOpen] = useState(false)
   const [reactionPickerMessageId, setReactionPickerMessageId] = useState(null)
   const [uploadBusy, setUploadBusy] = useState(false)
@@ -488,9 +492,9 @@ export function ChatPage() {
     }
   }
 
-  async function attemptSend(conversationId, body, tempId) {
+  async function attemptSend(conversationId, body, tempId, replyToId) {
     try {
-      const real = await sendMessage(conversationId, { body }, token)
+      const real = await sendMessage(conversationId, { body, replyToId }, token)
       setMessages((prev) => {
         if (prev.some((m) => m.id === real.id)) return prev.filter((m) => m.id !== tempId)
         return prev.map((m) => (m.id === tempId ? real : m))
@@ -505,6 +509,15 @@ export function ChatPage() {
     const body = draft.trim()
     if (!body || !activeConversationId || messagesLoading) return
     setDraft('')
+    const replyToId = replyingTo?.id ?? null
+    // The optimistic bubble reuses replyingTo directly as its quoted
+    // snippet — same {id, senderId, body, deletedAt} shape the server
+    // returns, so no special-casing is needed once the real message
+    // replaces it.
+    const replyToSnippet = replyingTo
+      ? { id: replyingTo.id, senderId: replyingTo.senderId, body: replyingTo.body, deletedAt: replyingTo.deletedAt }
+      : null
+    setReplyingTo(null)
     const tempId = `temp-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
     const optimistic = {
       id: tempId,
@@ -513,11 +526,12 @@ export function ChatPage() {
       body,
       createdAt: new Date().toISOString(),
       pending: true,
+      replyTo: replyToSnippet,
     }
     setMessages((prev) => [...prev, optimistic])
     isAtBottomRef.current = true
     requestAnimationFrame(scrollToBottom)
-    attemptSend(activeConversationId, body, tempId)
+    attemptSend(activeConversationId, body, tempId, replyToId)
   }
 
   async function handleFileSelected(e) {
@@ -853,6 +867,16 @@ export function ChatPage() {
                               </div>
                             ) : (
                               <div className="chat-bubble">
+                                {m.replyTo && (
+                                  <div className="chat-bubble-quote">
+                                    <span className="chat-bubble-quote-name">
+                                      {m.replyTo.senderId === user.id ? t('chat.you') : threadHeaderName}
+                                    </span>
+                                    <span className="chat-bubble-quote-body">
+                                      {m.replyTo.deletedAt ? t('chat.messageDeleted') : m.replyTo.body}
+                                    </span>
+                                  </div>
+                                )}
                                 {m.attachmentType === 'image' && (
                                   <a href={m.attachmentUrl} target="_blank" rel="noreferrer" className="chat-attachment-image-link">
                                     <img src={m.attachmentUrl} alt={m.attachmentName || ''} className="chat-attachment-image" />
@@ -932,6 +956,14 @@ export function ChatPage() {
                                     />
                                   )}
                                 </span>
+                                <button
+                                  type="button"
+                                  className="chat-bubble-action-btn"
+                                  aria-label={t('chat.reply')}
+                                  onClick={() => setReplyingTo(m)}
+                                >
+                                  ↩️
+                                </button>
                                 {mine && (
                                   <>
                                     <button
@@ -979,6 +1011,27 @@ export function ChatPage() {
               <div className="chat-typing-indicator" aria-live="polite">
                 {otherTyping && t('chat.typingIndicator', { name: threadHeaderName })}
               </div>
+
+              {replyingTo && (
+                <div className="chat-reply-banner">
+                  <span className="chat-reply-banner-text">
+                    <span className="chat-reply-banner-name">
+                      {t('chat.replyingTo', { name: replyingTo.senderId === user.id ? t('chat.you') : threadHeaderName })}
+                    </span>
+                    <span className="chat-reply-banner-body">
+                      {replyingTo.deletedAt ? t('chat.messageDeleted') : replyingTo.body}
+                    </span>
+                  </span>
+                  <button
+                    type="button"
+                    className="chat-thread-search-btn"
+                    aria-label={t('chat.cancelReply')}
+                    onClick={() => setReplyingTo(null)}
+                  >
+                    ✕
+                  </button>
+                </div>
+              )}
 
               {uploadError && <p className="error" role="alert">{uploadError}</p>}
               <form className="chat-composer" onSubmit={handleSend}>

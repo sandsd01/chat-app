@@ -1294,6 +1294,42 @@ label {
   font-weight: 600;
 }
 
+/* The quoted snippet a reply carries. border-left in currentColor tracks
+   whichever text colour the surrounding .mine/.theirs bubble already set,
+   so this needs no colour of its own — only the two backgrounds below are
+   bubble-side-specific, since a flat tint that looked right against the
+   dark "mine" fill would be too pale against "theirs"' light one. */
+.chat-bubble-quote {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 6px 10px;
+  margin-bottom: 6px;
+  border-left: 3px solid currentColor;
+  border-radius: 4px;
+  font-size: 13px;
+  line-height: 1.3;
+  opacity: 0.85;
+}
+
+.chat-bubble-quote-name {
+  font-weight: 600;
+}
+
+.chat-bubble-quote-body {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.chat-bubble-row.mine .chat-bubble-quote {
+  background: rgb(255 255 255 / 15%);
+}
+
+.chat-bubble-row.theirs .chat-bubble-quote {
+  background: var(--bg-raised);
+}
+
 .chat-bubble-edit {
   display: flex;
   flex-direction: column;
@@ -1420,6 +1456,40 @@ label {
   font-size: 12px;
   font-style: italic;
   color: var(--text-muted);
+}
+
+/* Sits directly above .chat-composer, same flex-row-with-a-close-button
+   shape as .chat-search-bar just above it in the thread pane. */
+.chat-reply-banner {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 16px;
+  border-top: 1px solid var(--border);
+  background: var(--bg-subtle);
+}
+
+.chat-reply-banner-text {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+
+.chat-reply-banner-name {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--accent);
+}
+
+.chat-reply-banner-body {
+  font-size: 13px;
+  color: var(--text-muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .chat-composer {

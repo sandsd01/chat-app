@@ -282,6 +282,7 @@ router.get("/conversations/:id/messages", async (req, res) => {
   const page = rows.slice(0, limit);
 
   const reactionsByMessage = await reactionsForMessages(page.map((m) => m.id), req.user.id);
+  const replyPreviews = await replyPreviewsForMessages(page);
 
   // Presigned GET URLs are minted fresh on every read rather than stored —
   // never a permanent link, and this route already only reaches rows for a
@@ -292,6 +293,7 @@ router.get("/conversations/:id/messages", async (req, res) => {
       ...m,
       attachmentUrl: m.attachmentKey ? await createDownloadUrl(m.attachmentKey, m.attachmentType) : null,
       reactions: reactionsByMessage.get(m.id) || [],
+      replyTo: m.replyToId ? replyPreviews.get(m.replyToId) || null : null,
     }))
   );
 
@@ -331,11 +333,13 @@ router.get("/conversations/:id/messages/search", async (req, res) => {
 
   const hasMore = rows.length > limit;
   const page = rows.slice(0, limit);
+  const replyPreviews = await replyPreviewsForMessages(page);
 
   const data = await Promise.all(
     page.map(async (m) => ({
       ...m,
       attachmentUrl: m.attachmentKey ? await createDownloadUrl(m.attachmentKey, m.attachmentType) : null,
+      replyTo: m.replyToId ? replyPreviews.get(m.replyToId) || null : null,
     }))
   );
 
@@ -401,6 +405,19 @@ router.post("/conversations/:id/messages", async (req, res) => {
     return res.status(400).json({ error: "body must be 4000 characters or fewer" });
   }
 
+  // getMessageInConversation already excludes a soft-deleted message
+  // (deletedAt set) — you can't start a new reply quoting one that's
+  // already gone, the same way the UI would never offer a reply action on
+  // a bubble already showing "This message was deleted."
+  const replyToIdRaw = req.body?.replyToId;
+  let replyTarget = null;
+  if (replyToIdRaw !== undefined && replyToIdRaw !== null) {
+    replyTarget = await getMessageInConversation(conversationId, Number(replyToIdRaw));
+    if (!replyTarget) {
+      return res.status(400).json({ error: "replyToId must reference a message in this conversation" });
+    }
+  }
+
   let attachmentFields = {
     attachmentKey: null,
     attachmentName: null,
@@ -433,7 +450,7 @@ router.post("/conversations/:id/messages", async (req, res) => {
 
   const message = await prisma.$transaction(async (tx) => {
     const created = await tx.message.create({
-      data: { conversationId, senderId: req.user.id, body, ...attachmentFields },
+      data: { conversationId, senderId: req.user.id, body, replyToId: replyTarget?.id ?? null, ...attachmentFields },
     });
     await tx.conversation.update({
       where: { id: conversationId },
@@ -461,6 +478,17 @@ router.post("/conversations/:id/messages", async (req, res) => {
     // sender already gets the strictly-stronger "Read" tick once they do
     // read it.
     delivered: deliveredAtSend,
+    // A small snapshot, not a live reference — reusing the exact row
+    // getMessageInConversation already fetched to validate replyToId above,
+    // rather than a second query. If the original is edited or deleted
+    // after this reply is sent, this quoted snippet doesn't follow along;
+    // GET .../messages re-fetches it fresh on every page load instead (see
+    // replyPreviewsForMessages below), so a reload always shows the
+    // original's current state even though this specific SSE/response
+    // payload is frozen at send time.
+    replyTo: replyTarget
+      ? { id: replyTarget.id, senderId: replyTarget.senderId, body: replyTarget.body, deletedAt: replyTarget.deletedAt }
+      : null,
   };
 
   const attachmentUrl = payload.attachmentKey
@@ -576,6 +604,26 @@ router.delete("/conversations/:id/messages/:messageId", async (req, res) => {
 
   res.json(payload);
 });
+
+/**
+ * Batched lookup of the small quoted-snippet shape for every replyToId on a
+ * page — one query for the whole page rather than one per reply. Re-fetched
+ * fresh on every call (not cached anywhere), so unlike the send-time
+ * payload's frozen replyTo, a reload always reflects the original's
+ * current edited/deleted state.
+ */
+async function replyPreviewsForMessages(messages) {
+  const result = new Map();
+  const ids = [...new Set(messages.map((m) => m.replyToId).filter((id) => id != null))];
+  if (ids.length === 0) return result;
+
+  const rows = await prisma.message.findMany({
+    where: { id: { in: ids } },
+    select: { id: true, senderId: true, body: true, deletedAt: true },
+  });
+  for (const row of rows) result.set(row.id, row);
+  return result;
+}
 
 // --- Reactions ----------------------------------------------------------
 // One row per (message, user, emoji) — see prisma/schema.prisma's

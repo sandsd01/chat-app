@@ -416,6 +416,44 @@ describe("Chat API", () => {
       // Pages come back newest-first; reverse to compare against insertion order.
       assert.deepEqual(seenBodies.slice().reverse(), bodies);
     });
+
+    test("replyTo reflects the original's current state on every fetch, not what it was when the reply was sent", async () => {
+      const conv = await createConversation(adminToken, staffUser.id);
+      const original = await request(app)
+        .post(`/api/chat/conversations/${conv.body.id}/messages`)
+        .set("Authorization", `Bearer ${adminToken}`)
+        .send({ body: "before edit" });
+      const reply = await request(app)
+        .post(`/api/chat/conversations/${conv.body.id}/messages`)
+        .set("Authorization", `Bearer ${staffToken}`)
+        .send({ body: "a reply", replyToId: original.body.id });
+
+      const beforeEdit = await request(app)
+        .get(`/api/chat/conversations/${conv.body.id}/messages`)
+        .set("Authorization", `Bearer ${adminToken}`);
+      const replyRowBefore = beforeEdit.body.data.find((m) => m.id === reply.body.id);
+      assert.deepEqual(replyRowBefore.replyTo, {
+        id: original.body.id,
+        senderId: adminUser.id,
+        body: "before edit",
+        deletedAt: null,
+      });
+
+      await request(app)
+        .patch(`/api/chat/conversations/${conv.body.id}/messages/${original.body.id}`)
+        .set("Authorization", `Bearer ${adminToken}`)
+        .send({ body: "after edit" });
+
+      const afterEdit = await request(app)
+        .get(`/api/chat/conversations/${conv.body.id}/messages`)
+        .set("Authorization", `Bearer ${adminToken}`);
+      const replyRowAfter = afterEdit.body.data.find((m) => m.id === reply.body.id);
+      assert.equal(replyRowAfter.replyTo.body, "after edit");
+
+      // A message with no reply gets an explicit null, not an absent key.
+      const originalRow = afterEdit.body.data.find((m) => m.id === original.body.id);
+      assert.equal(originalRow.replyTo, null);
+    });
   });
 
   describe("GET /chat/conversations/:id/messages/search", () => {
@@ -602,6 +640,70 @@ describe("Chat API", () => {
       } finally {
         unsubscribe();
       }
+    });
+
+    test("replyToId attaches a quoted snippet of the original, visible to both participants", async () => {
+      const conv = await createConversation(adminToken, staffUser.id);
+      const original = await request(app)
+        .post(`/api/chat/conversations/${conv.body.id}/messages`)
+        .set("Authorization", `Bearer ${adminToken}`)
+        .send({ body: "original message" });
+
+      const reply = await request(app)
+        .post(`/api/chat/conversations/${conv.body.id}/messages`)
+        .set("Authorization", `Bearer ${staffToken}`)
+        .send({ body: "a reply", replyToId: original.body.id });
+      assert.equal(reply.status, 201);
+      assert.deepEqual(reply.body.replyTo, {
+        id: original.body.id,
+        senderId: adminUser.id,
+        body: "original message",
+        deletedAt: null,
+      });
+
+      const dbMessage = await prisma.message.findUnique({ where: { id: reply.body.id } });
+      assert.equal(dbMessage.replyToId, original.body.id);
+    });
+
+    test("400 when replyToId references a message in a different conversation", async () => {
+      const convStaff = await createConversation(adminToken, staffUser.id);
+      const convOther = await createConversation(adminToken, otherUser.id);
+      const inOtherConv = await request(app)
+        .post(`/api/chat/conversations/${convOther.body.id}/messages`)
+        .set("Authorization", `Bearer ${adminToken}`)
+        .send({ body: "wrong conversation" });
+
+      const res = await request(app)
+        .post(`/api/chat/conversations/${convStaff.body.id}/messages`)
+        .set("Authorization", `Bearer ${adminToken}`)
+        .send({ body: "a reply", replyToId: inOtherConv.body.id });
+      assert.equal(res.status, 400);
+    });
+
+    test("400 when replyToId references an already-deleted message", async () => {
+      const conv = await createConversation(adminToken, staffUser.id);
+      const original = await request(app)
+        .post(`/api/chat/conversations/${conv.body.id}/messages`)
+        .set("Authorization", `Bearer ${adminToken}`)
+        .send({ body: "will be deleted" });
+      await request(app)
+        .delete(`/api/chat/conversations/${conv.body.id}/messages/${original.body.id}`)
+        .set("Authorization", `Bearer ${adminToken}`);
+
+      const res = await request(app)
+        .post(`/api/chat/conversations/${conv.body.id}/messages`)
+        .set("Authorization", `Bearer ${staffToken}`)
+        .send({ body: "a reply", replyToId: original.body.id });
+      assert.equal(res.status, 400);
+    });
+
+    test("400 when replyToId is not an integer", async () => {
+      const conv = await createConversation(adminToken, staffUser.id);
+      const res = await request(app)
+        .post(`/api/chat/conversations/${conv.body.id}/messages`)
+        .set("Authorization", `Bearer ${adminToken}`)
+        .send({ body: "a reply", replyToId: "not-a-number" });
+      assert.equal(res.status, 400);
     });
   });
 

@@ -43,10 +43,10 @@ export function listDriveHistory(conversationId, opts = {}, token) {
   return apiFetch(`/chat/conversations/${conversationId}/messages/drive-history${qs ? `?${qs}` : ''}`, { token })
 }
 
-export function sendMessage(conversationId, { body, attachmentKey, attachmentName } = {}, token) {
+export function sendMessage(conversationId, { body, attachmentKey, attachmentName, replyToId } = {}, token) {
   return apiFetch(`/chat/conversations/${conversationId}/messages`, {
     method: 'POST',
-    body: { body, attachmentKey, attachmentName },
+    body: { body, attachmentKey, attachmentName, replyToId },
     token,
   })
 }
