@@ -17,7 +17,8 @@ import {
   removeReaction,
 } from '../api/chat'
 import { EmojiPicker } from '../components/EmojiPicker'
-import { initials, localeFor, CLEARED_ATTACHMENT_FIELDS } from '../lib/format'
+import { localeFor, CLEARED_ATTACHMENT_FIELDS } from '../lib/format'
+import { Avatar } from '../components/Avatar'
 import { useDocumentTitle } from '../hooks/useDocumentTitle'
 
 const MESSAGE_PAGE_SIZE = 50
@@ -559,10 +560,11 @@ export function ChatPage() {
                     className="chat-user-result"
                     onClick={() => handleStartChat(u)}
                   >
-                    <span className="chat-avatar">{initials(u.name || u.email)}</span>
+                    <Avatar user={u} isOnline={u.isOnline} />
                     <span className="chat-conversation-main">
                       <span className="chat-conversation-name">{u.name || u.email}</span>
                       {u.name && <span className="chat-conversation-preview">{u.email}</span>}
+                      {u.statusMessage && <span className="user-status-line">{u.statusMessage}</span>}
                     </span>
                   </button>
                 ))}
@@ -599,9 +601,12 @@ export function ChatPage() {
                       unread ? ' unread' : ''
                     }`}
                   >
-                    <span className="chat-avatar">{initials(name)}</span>
+                    <Avatar user={c.otherUser} isOnline={c.otherUser?.isOnline} />
                     <span className="chat-conversation-main">
-                      <span className={`chat-conversation-name${unread ? ' unread' : ''}`}>{name}</span>
+                      <span className={`chat-conversation-name${unread ? ' unread' : ''}`}>
+                        {name}
+                        {c.otherUser?.isOnline && <span className="sr-only"> · {t('presence.online')}</span>}
+                      </span>
                       <span className={`chat-conversation-preview${unread ? ' unread' : ''}`}>
                         {c.lastMessage ? c.lastMessage.body : t('chat.startNewChat')}
                       </span>
@@ -638,8 +643,17 @@ export function ChatPage() {
                 >
                   ←
                 </button>
-                <span className="chat-avatar sm">{initials(threadHeaderName)}</span>
-                <span className="chat-thread-header-name">{threadHeaderName}</span>
+                <Avatar
+                  user={activeConversation?.otherUser || { name: threadHeaderName }}
+                  size="sm"
+                  isOnline={activeConversation?.otherUser?.isOnline}
+                />
+                <span className="chat-thread-header-name">
+                  {threadHeaderName}
+                  {activeConversation?.otherUser?.statusMessage && (
+                    <span className="user-status-line">{activeConversation.otherUser.statusMessage}</span>
+                  )}
+                </span>
                 <span className="chat-thread-header-spacer" />
                 {activeConversation && (
                   <button

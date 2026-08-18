@@ -123,3 +123,139 @@ describe("PATCH /users/me", () => {
     assert.equal(updated.publicIdCustomized, true);
   });
 });
+
+describe("PATCH /users/me — statusMessage", () => {
+  let alice, aliceToken;
+
+  beforeEach(async () => {
+    await resetDb();
+    alice = await createUser({ email: "alice@test.com", password: "alicepass1", name: "Alice" });
+    aliceToken = await login("alice@test.com", "alicepass1");
+  });
+
+  test("sets and trims a status message", async () => {
+    const res = await request(app)
+      .patch("/api/users/me")
+      .set("Authorization", `Bearer ${aliceToken}`)
+      .send({ statusMessage: "  out for lunch  " });
+    assert.equal(res.status, 200);
+    assert.equal(res.body.statusMessage, "out for lunch");
+
+    const updated = await prisma.user.findUnique({ where: { id: alice.id } });
+    assert.equal(updated.statusMessage, "out for lunch");
+  });
+
+  test("a blank string and null both clear it to null", async () => {
+    for (const value of ["", "   ", null]) {
+      await request(app)
+        .patch("/api/users/me")
+        .set("Authorization", `Bearer ${aliceToken}`)
+        .send({ statusMessage: "something" });
+
+      const res = await request(app)
+        .patch("/api/users/me")
+        .set("Authorization", `Bearer ${aliceToken}`)
+        .send({ statusMessage: value });
+      assert.equal(res.status, 200);
+      assert.equal(res.body.statusMessage, null, `value ${JSON.stringify(value)} must clear to null`);
+
+      const updated = await prisma.user.findUnique({ where: { id: alice.id } });
+      assert.equal(updated.statusMessage, null);
+    }
+  });
+
+  test("rejects a status message over 80 characters", async () => {
+    const res = await request(app)
+      .patch("/api/users/me")
+      .set("Authorization", `Bearer ${aliceToken}`)
+      .send({ statusMessage: "x".repeat(81) });
+    assert.equal(res.status, 400);
+  });
+
+  test("rejects a non-string, non-null status message", async () => {
+    const res = await request(app)
+      .patch("/api/users/me")
+      .set("Authorization", `Bearer ${aliceToken}`)
+      .send({ statusMessage: 42 });
+    assert.equal(res.status, 400);
+  });
+
+  test("400s when the body updates nothing", async () => {
+    const res = await request(app).patch("/api/users/me").set("Authorization", `Bearer ${aliceToken}`).send({});
+    assert.equal(res.status, 400);
+  });
+
+  // The regression this route was restructured for: publicId is a one-shot
+  // change, but that guard used to run for every PATCH, so once the custom
+  // ID was spent a status-only update 409'd too.
+  test("a status update still works after the one-time custom publicId is spent", async () => {
+    const setId = await request(app)
+      .patch("/api/users/me")
+      .set("Authorization", `Bearer ${aliceToken}`)
+      .send({ publicId: "aliceid1" });
+    assert.equal(setId.status, 200);
+
+    const res = await request(app)
+      .patch("/api/users/me")
+      .set("Authorization", `Bearer ${aliceToken}`)
+      .send({ statusMessage: "still editable" });
+    assert.equal(res.status, 200);
+    assert.equal(res.body.statusMessage, "still editable");
+  });
+
+  test("GET /auth/me returns the status message", async () => {
+    await request(app)
+      .patch("/api/users/me")
+      .set("Authorization", `Bearer ${aliceToken}`)
+      .send({ statusMessage: "on holiday" });
+
+    const res = await request(app).get("/api/auth/me").set("Authorization", `Bearer ${aliceToken}`);
+    assert.equal(res.status, 200);
+    assert.equal(res.body.statusMessage, "on holiday");
+    assert.equal(res.body.avatarUrl, null, "no avatar uploaded, and R2 is unconfigured in tests");
+  });
+});
+
+describe("Avatar routes without R2 configured", () => {
+  let aliceToken;
+
+  beforeEach(async () => {
+    await resetDb();
+    await createUser({ email: "alice@test.com", password: "alicepass1" });
+    aliceToken = await login("alice@test.com", "alicepass1");
+  });
+
+  test("POST /users/me/avatar/upload-url 503s rather than crashing", async () => {
+    const res = await request(app)
+      .post("/api/users/me/avatar/upload-url")
+      .set("Authorization", `Bearer ${aliceToken}`)
+      .send({ mimeType: "image/png", size: 1024 });
+    assert.equal(res.status, 503);
+  });
+
+  test("PUT /users/me/avatar 503s rather than crashing", async () => {
+    const res = await request(app)
+      .put("/api/users/me/avatar")
+      .set("Authorization", `Bearer ${aliceToken}`)
+      .send({ key: "avatars/1/abc" });
+    assert.equal(res.status, 503);
+  });
+
+  // Clearing an avatar touches no object storage at all, so it must keep
+  // working whether or not R2 is configured.
+  test("DELETE /users/me/avatar works regardless, and clears the key", async () => {
+    const res = await request(app).delete("/api/users/me/avatar").set("Authorization", `Bearer ${aliceToken}`);
+    assert.equal(res.status, 204);
+  });
+
+  test("all three require authentication", async () => {
+    for (const req of [
+      request(app).post("/api/users/me/avatar/upload-url").send({ mimeType: "image/png", size: 1 }),
+      request(app).put("/api/users/me/avatar").send({ key: "avatars/1/abc" }),
+      request(app).delete("/api/users/me/avatar"),
+    ]) {
+      const res = await req;
+      assert.equal(res.status, 401);
+    }
+  });
+});

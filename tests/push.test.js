@@ -197,3 +197,124 @@ describe("Push API", () => {
     });
   });
 });
+
+describe("Per-device push subscription management", () => {
+  let alice, aliceToken, bob, bobToken;
+
+  beforeEach(async () => {
+    await resetDb();
+    alice = await createUser({ email: "alice@test.com", password: "alicepass1" });
+    bob = await createUser({ email: "bob@test.com", password: "bobpass1" });
+    aliceToken = await login("alice@test.com", "alicepass1");
+    bobToken = await login("bob@test.com", "bobpass1");
+  });
+
+  test("both routes require authentication", async () => {
+    assert.equal((await request(app).get("/api/push/subscriptions")).status, 401);
+    assert.equal((await request(app).delete("/api/push/subscriptions/1")).status, 401);
+  });
+
+  test("lists this account's subscriptions with a device label, newest first", async () => {
+    await request(app)
+      .post("/api/push/subscribe")
+      .set("Authorization", `Bearer ${aliceToken}`)
+      .set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120.0 Safari/537.36")
+      .send({ subscription: FAKE_SUBSCRIPTION });
+
+    await request(app)
+      .post("/api/push/subscribe")
+      .set("Authorization", `Bearer ${aliceToken}`)
+      .set("User-Agent", "Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 Safari/604.1")
+      .send({ subscription: { ...FAKE_SUBSCRIPTION, endpoint: "https://push.example.com/second" } });
+
+    const res = await request(app).get("/api/push/subscriptions").set("Authorization", `Bearer ${aliceToken}`);
+    assert.equal(res.status, 200);
+    assert.equal(res.body.length, 2);
+
+    const labels = res.body.map((r) => r.device);
+    assert.ok(labels.includes("Chrome on Windows"), `got ${JSON.stringify(labels)}`);
+    assert.ok(labels.includes("Safari on iOS"), `got ${JSON.stringify(labels)}`);
+  });
+
+  // These are the credentials for pushing to that browser — the UI only ever
+  // needs an id and a label.
+  test("never exposes the endpoint or key material", async () => {
+    await request(app)
+      .post("/api/push/subscribe")
+      .set("Authorization", `Bearer ${aliceToken}`)
+      .send({ subscription: FAKE_SUBSCRIPTION });
+
+    const res = await request(app).get("/api/push/subscriptions").set("Authorization", `Bearer ${aliceToken}`);
+    const row = res.body[0];
+    assert.equal(row.endpoint, undefined);
+    assert.equal(row.p256dh, undefined);
+    assert.equal(row.authKey, undefined);
+    assert.ok(Number.isInteger(row.id));
+  });
+
+  test("a missing User-Agent still subscribes, just unlabelled", async () => {
+    await request(app)
+      .post("/api/push/subscribe")
+      .set("Authorization", `Bearer ${aliceToken}`)
+      .set("User-Agent", "")
+      .send({ subscription: FAKE_SUBSCRIPTION });
+
+    const res = await request(app).get("/api/push/subscriptions").set("Authorization", `Bearer ${aliceToken}`);
+    assert.equal(res.body.length, 1);
+    assert.equal(res.body[0].device, "Unknown device");
+  });
+
+  test("only lists your own subscriptions", async () => {
+    await request(app)
+      .post("/api/push/subscribe")
+      .set("Authorization", `Bearer ${bobToken}`)
+      .send({ subscription: FAKE_SUBSCRIPTION });
+
+    const res = await request(app).get("/api/push/subscriptions").set("Authorization", `Bearer ${aliceToken}`);
+    assert.deepEqual(res.body, []);
+  });
+
+  test("revokes one of your own devices", async () => {
+    await request(app)
+      .post("/api/push/subscribe")
+      .set("Authorization", `Bearer ${aliceToken}`)
+      .send({ subscription: FAKE_SUBSCRIPTION });
+
+    const list = await request(app).get("/api/push/subscriptions").set("Authorization", `Bearer ${aliceToken}`);
+    const id = list.body[0].id;
+
+    const res = await request(app)
+      .delete(`/api/push/subscriptions/${id}`)
+      .set("Authorization", `Bearer ${aliceToken}`);
+    assert.equal(res.status, 204);
+
+    const remaining = await prisma.pushSubscription.findMany({ where: { userId: alice.id } });
+    assert.equal(remaining.length, 0);
+  });
+
+  // 404, not a successful delete: an id you don't own must be indistinguishable
+  // from one that doesn't exist.
+  test("404s (and deletes nothing) for another account's subscription id", async () => {
+    await request(app)
+      .post("/api/push/subscribe")
+      .set("Authorization", `Bearer ${bobToken}`)
+      .send({ subscription: FAKE_SUBSCRIPTION });
+
+    const bobsRow = await prisma.pushSubscription.findFirst({ where: { userId: bob.id } });
+
+    const res = await request(app)
+      .delete(`/api/push/subscriptions/${bobsRow.id}`)
+      .set("Authorization", `Bearer ${aliceToken}`);
+    assert.equal(res.status, 404);
+
+    const stillThere = await prisma.pushSubscription.findUnique({ where: { id: bobsRow.id } });
+    assert.ok(stillThere, "another account's subscription must survive");
+  });
+
+  test("400s on a non-numeric id", async () => {
+    const res = await request(app)
+      .delete("/api/push/subscriptions/abc")
+      .set("Authorization", `Bearer ${aliceToken}`);
+    assert.equal(res.status, 400);
+  });
+});

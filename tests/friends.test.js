@@ -57,7 +57,18 @@ describe("Friends API", () => {
       assert.equal(lower.status, 200);
       assert.equal(lower.body.id, bob.id);
       assert.equal(lower.body.relationship, "none");
-      assert.deepEqual(Object.keys(lower.body).sort(), ["email", "id", "name", "publicId", "relationship"]);
+      // Pinned exactly so a new field can't quietly start leaking out of the
+      // one route that answers about an account you're not connected to.
+      // avatarUrl is the presigned URL, never the underlying avatarKey.
+      assert.deepEqual(Object.keys(lower.body).sort(), [
+        "avatarUrl",
+        "email",
+        "id",
+        "name",
+        "publicId",
+        "relationship",
+        "statusMessage",
+      ]);
 
       await request(app)
         .post("/api/friends/requests")
@@ -439,5 +450,82 @@ describe("Friends API", () => {
       assert.equal(res.status, 204);
       assert.deepEqual(published, []);
     });
+  });
+});
+
+describe("Presence and profile fields on user-shaped responses", () => {
+  let alice, aliceToken, bob;
+
+  beforeEach(async () => {
+    await resetDb();
+    alice = await createUser({ email: "alice@test.com", password: "alicepass1", name: "Alice" });
+    bob = await createUser({ email: "bob@test.com", password: "bobpass1", name: "Bob" });
+    const login = await request(app)
+      .post("/api/auth/login")
+      .send({ email: "alice@test.com", password: "alicepass1" });
+    aliceToken = login.body.token;
+    await makeFriends(alice, bob);
+  });
+
+  test("GET /friends reports isOnline false when the other side has no stream open", async () => {
+    const res = await request(app).get("/api/friends").set("Authorization", `Bearer ${aliceToken}`);
+    assert.equal(res.status, 200);
+    assert.equal(res.body[0].otherUser.isOnline, false);
+  });
+
+  // isOnline is read from chatBus at request time (the same "does this user
+  // have an SSE stream on this process" check that already gates push), so a
+  // subscriber standing in for an open stream is exactly the real condition.
+  test("GET /friends reports isOnline true while the other side is subscribed", async () => {
+    const unsubscribe = chatBus.subscribe(bob.id, () => {});
+    try {
+      const res = await request(app).get("/api/friends").set("Authorization", `Bearer ${aliceToken}`);
+      assert.equal(res.body[0].otherUser.isOnline, true);
+    } finally {
+      unsubscribe();
+    }
+
+    const after = await request(app).get("/api/friends").set("Authorization", `Bearer ${aliceToken}`);
+    assert.equal(after.body[0].otherUser.isOnline, false, "must go back to false once the stream closes");
+  });
+
+  test("a friend's status message rides along on the friends list", async () => {
+    await prisma.user.update({ where: { id: bob.id }, data: { statusMessage: "in a meeting" } });
+
+    const res = await request(app).get("/api/friends").set("Authorization", `Bearer ${aliceToken}`);
+    assert.equal(res.body[0].otherUser.statusMessage, "in a meeting");
+  });
+
+  test("GET /friends/lookup includes the profile fields but never the raw avatar key", async () => {
+    await prisma.user.update({
+      where: { id: bob.id },
+      data: { statusMessage: "hello", avatarKey: `avatars/${bob.id}/x` },
+    });
+
+    const res = await request(app)
+      .get(`/api/friends/lookup?publicId=${bob.publicId}`)
+      .set("Authorization", `Bearer ${aliceToken}`);
+
+    assert.equal(res.status, 200);
+    assert.equal(res.body.statusMessage, "hello");
+    assert.equal(res.body.avatarKey, undefined);
+    // R2 is unconfigured in this test process, so no URL can be signed.
+    assert.equal(res.body.avatarUrl, null);
+  });
+
+  test("a conversation summary carries the other user's presence and status", async () => {
+    await prisma.user.update({ where: { id: bob.id }, data: { statusMessage: "brb" } });
+
+    const created = await request(app)
+      .post("/api/chat/conversations")
+      .set("Authorization", `Bearer ${aliceToken}`)
+      .send({ userId: bob.id });
+    assert.equal(created.status, 201);
+    assert.equal(created.body.otherUser.statusMessage, "brb");
+    assert.equal(created.body.otherUser.isOnline, false);
+
+    const list = await request(app).get("/api/chat/conversations").set("Authorization", `Bearer ${aliceToken}`);
+    assert.equal(list.body[0].otherUser.statusMessage, "brb");
+    assert.equal(list.body[0].otherUser.isOnline, false);
   });
 });

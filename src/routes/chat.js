@@ -6,10 +6,10 @@ const { areFriends } = require("./friends");
 const { sendPushToUser } = require("../lib/push");
 const { attachmentsConfigured, createUploadUrl, verifyUploadedObject, createDownloadUrl } = require("../lib/attachments");
 const { createTicketStore } = require("../lib/ticketStore");
+const { PUBLIC_USER_SELECT, toPublicUser } = require("../lib/publicUser");
 
 const router = express.Router();
 
-const PUBLIC_USER_SELECT = { id: true, name: true, email: true };
 
 // --- SSE stream tickets --------------------------------------------------
 // EventSource can't set an Authorization header, so GET /stream can't go
@@ -131,12 +131,14 @@ function parsePagingParams(req) {
   return { limit, before };
 }
 
-function conversationSummary(conversation, meId) {
+async function conversationSummary(conversation, meId) {
   const isUserA = conversation.userAId === meId;
-  const otherUser = isUserA ? conversation.userB : conversation.userA;
+  const other = isUserA ? conversation.userB : conversation.userA;
   return {
     id: conversation.id,
-    otherUser,
+    // Same point-in-time presence read as GET /friends — see the comment
+    // there for why this isn't its own live event.
+    otherUser: { ...(await toPublicUser(other)), isOnline: chatBus.hasSubscribers(other.id) },
     lastMessageAt: conversation.lastMessageAt,
     createdAt: conversation.createdAt,
     // The other participant's own last-read timestamp (not the caller's) —
@@ -186,7 +188,7 @@ router.get("/conversations", async (req, res) => {
       });
 
       return {
-        ...conversationSummary(c, meId),
+        ...(await conversationSummary(c, meId)),
         lastMessage: c.messages[0] || null,
         unreadCount,
       };
@@ -226,11 +228,11 @@ router.post("/conversations", async (req, res) => {
     include,
   });
   if (existing) {
-    return res.status(200).json(conversationSummary(existing, meId));
+    return res.status(200).json(await conversationSummary(existing, meId));
   }
 
   const created = await prisma.conversation.create({ data: { userAId, userBId }, include });
-  res.status(201).json(conversationSummary(created, meId));
+  res.status(201).json(await conversationSummary(created, meId));
 });
 
 router.get("/conversations/:id/messages", async (req, res) => {

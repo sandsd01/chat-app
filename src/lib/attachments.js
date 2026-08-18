@@ -79,6 +79,44 @@ function keyFor(conversationId, fileName) {
   return `conversations/${conversationId}/${crypto.randomUUID()}-${safeName}`;
 }
 
+/// Avatars live under their own prefix, keyed by user rather than by
+/// conversation: they're profile data, not chat content, and keeping them out
+/// of `conversations/` means POST /chat/conversations/:id/messages's
+/// "attachment must start with conversations/<this id>/" check can never be
+/// satisfied by pointing at somebody's avatar object. Still UUID-suffixed, so
+/// replacing an avatar writes a new object instead of overwriting one a
+/// still-valid presigned URL might be mid-download.
+function avatarKeyFor(userId) {
+  return `avatars/${userId}/${crypto.randomUUID()}`;
+}
+
+const MAX_AVATAR_BYTES = 2 * 1024 * 1024;
+
+/// Avatars are image-only and much smaller than a chat image: they're
+/// rendered as a ~40px badge, so a 10MB original is pure waste, and the
+/// "file" fallback that attachments allow makes no sense for something the
+/// UI can only ever draw as an <img>.
+async function createAvatarUploadUrl({ userId, mimeType, size }) {
+  if (attachmentTypeFor(mimeType) !== "image") {
+    throw new Error("Avatar must be a PNG, JPEG, GIF, WebP, or AVIF image");
+  }
+  if (!Number.isInteger(size) || size <= 0) {
+    throw new Error("size is required");
+  }
+  if (size > MAX_AVATAR_BYTES) {
+    throw new Error(`Image is too large (max ${Math.round(MAX_AVATAR_BYTES / (1024 * 1024))}MB)`);
+  }
+  const key = avatarKeyFor(userId);
+  const command = new PutObjectCommand({
+    Bucket: R2_BUCKET_NAME,
+    Key: key,
+    ContentType: mimeType,
+    ContentLength: size,
+  });
+  const url = await presigner.getSignedUrl(s3Client, command, { expiresIn: PRESIGN_TTL_SECONDS });
+  return { url, key };
+}
+
 /// Mints a presigned PUT URL for a validated upload. ContentType and
 /// ContentLength are bound into the signature, so the browser's PUT request
 /// must send matching Content-Type/Content-Length headers or R2 rejects it —
@@ -139,6 +177,9 @@ async function createDownloadUrl(key, attachmentType) {
 module.exports = {
   MAX_IMAGE_BYTES,
   MAX_FILE_BYTES,
+  MAX_AVATAR_BYTES,
+  avatarKeyFor,
+  createAvatarUploadUrl,
   BLOCKED_EXTENSIONS,
   attachmentTypeFor,
   validateUpload,

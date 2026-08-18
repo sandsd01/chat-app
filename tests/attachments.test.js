@@ -293,3 +293,129 @@ describe("GET /conversations/:id/messages with an attachment", () => {
     assert.equal(res.body.data[0].attachmentUrl, null);
   });
 });
+
+describe("Avatar upload with R2 configured", () => {
+  let alice, aliceToken, bob;
+
+  beforeEach(async () => {
+    await resetDb();
+    alice = await createUser({ email: "alice@test.com", password: "alicepass1", name: "Alice" });
+    bob = await createUser({ email: "bob@test.com", password: "bobpass1", name: "Bob" });
+    aliceToken = await login("alice@test.com", "alicepass1");
+  });
+
+  test("mints a presigned PUT under this user's own avatars/ prefix", async (t) => {
+    t.mock.method(presigner, "getSignedUrl", async (_client, command) => `https://fake.r2.example/${command.input.Key}`);
+
+    const res = await request(app)
+      .post("/api/users/me/avatar/upload-url")
+      .set("Authorization", `Bearer ${aliceToken}`)
+      .send({ mimeType: "image/png", size: 4096 });
+
+    assert.equal(res.status, 200);
+    assert.ok(res.body.key.startsWith(`avatars/${alice.id}/`), `unexpected key ${res.body.key}`);
+  });
+
+  test("rejects a non-image avatar", async () => {
+    const res = await request(app)
+      .post("/api/users/me/avatar/upload-url")
+      .set("Authorization", `Bearer ${aliceToken}`)
+      .send({ mimeType: "application/pdf", size: 4096 });
+    assert.equal(res.status, 400);
+  });
+
+  // SVG is XML that can carry an inline <script>; the attachment pipeline
+  // already classes it "file" rather than "image" for that reason, and an
+  // avatar renders straight into an <img>, so it must not slip through.
+  test("rejects an SVG avatar", async () => {
+    const res = await request(app)
+      .post("/api/users/me/avatar/upload-url")
+      .set("Authorization", `Bearer ${aliceToken}`)
+      .send({ mimeType: "image/svg+xml", size: 4096 });
+    assert.equal(res.status, 400);
+  });
+
+  test("rejects an avatar over 2MB", async () => {
+    const res = await request(app)
+      .post("/api/users/me/avatar/upload-url")
+      .set("Authorization", `Bearer ${aliceToken}`)
+      .send({ mimeType: "image/png", size: 3 * 1024 * 1024 });
+    assert.equal(res.status, 400);
+  });
+
+  test("confirming an upload stores the key and returns a URL", async (t) => {
+    t.mock.method(S3Client.prototype, "send", async () => ({ ContentLength: 2048, ContentType: "image/png" }));
+    t.mock.method(presigner, "getSignedUrl", async (_client, command) => `https://fake.r2.example/${command.input.Key}`);
+
+    const key = `avatars/${alice.id}/some-uuid`;
+    const res = await request(app)
+      .put("/api/users/me/avatar")
+      .set("Authorization", `Bearer ${aliceToken}`)
+      .send({ key });
+
+    assert.equal(res.status, 200);
+    assert.ok(res.body.avatarUrl.includes(key));
+
+    const updated = await prisma.user.findUnique({ where: { id: alice.id } });
+    assert.equal(updated.avatarKey, key);
+  });
+
+  // The key round-trips through the client, so the server has to re-check it
+  // belongs to the caller — otherwise anyone could claim someone else's
+  // avatar object, or a chat attachment, as their own profile picture.
+  test("refuses a key belonging to another user", async () => {
+    const res = await request(app)
+      .put("/api/users/me/avatar")
+      .set("Authorization", `Bearer ${aliceToken}`)
+      .send({ key: `avatars/${bob.id}/some-uuid` });
+
+    assert.equal(res.status, 400);
+    const updated = await prisma.user.findUnique({ where: { id: alice.id } });
+    assert.equal(updated.avatarKey, null);
+  });
+
+  test("refuses a conversation attachment key", async () => {
+    const res = await request(app)
+      .put("/api/users/me/avatar")
+      .set("Authorization", `Bearer ${aliceToken}`)
+      .send({ key: "conversations/1/some-uuid-photo.png" });
+    assert.equal(res.status, 400);
+  });
+
+  // R2 is the source of truth for what actually landed, not the mimeType
+  // claimed when the URL was minted.
+  test("refuses an object R2 reports as a non-image", async (t) => {
+    t.mock.method(S3Client.prototype, "send", async () => ({ ContentLength: 2048, ContentType: "application/pdf" }));
+
+    const res = await request(app)
+      .put("/api/users/me/avatar")
+      .set("Authorization", `Bearer ${aliceToken}`)
+      .send({ key: `avatars/${alice.id}/some-uuid` });
+    assert.equal(res.status, 400);
+  });
+
+  test("an avatar shows up as a presigned avatarUrl on the friends list", async (t) => {
+    t.mock.method(S3Client.prototype, "send", async () => ({ ContentLength: 2048, ContentType: "image/png" }));
+    t.mock.method(presigner, "getSignedUrl", async (_client, command) => `https://fake.r2.example/${command.input.Key}`);
+
+    await makeFriends(alice, bob);
+    const key = `avatars/${bob.id}/bob-uuid`;
+    await prisma.user.update({ where: { id: bob.id }, data: { avatarKey: key } });
+
+    const res = await request(app).get("/api/friends").set("Authorization", `Bearer ${aliceToken}`);
+    assert.equal(res.status, 200);
+    assert.equal(res.body.length, 1);
+    assert.ok(res.body[0].otherUser.avatarUrl.includes(key));
+    assert.equal(res.body[0].otherUser.avatarKey, undefined, "the raw key must never be exposed");
+  });
+
+  test("DELETE clears the key but leaves the R2 object alone", async () => {
+    await prisma.user.update({ where: { id: alice.id }, data: { avatarKey: `avatars/${alice.id}/x` } });
+
+    const res = await request(app).delete("/api/users/me/avatar").set("Authorization", `Bearer ${aliceToken}`);
+    assert.equal(res.status, 204);
+
+    const updated = await prisma.user.findUnique({ where: { id: alice.id } });
+    assert.equal(updated.avatarKey, null);
+  });
+});

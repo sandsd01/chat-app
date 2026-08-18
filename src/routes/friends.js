@@ -3,6 +3,7 @@ const prisma = require("../../prisma/client");
 const { authenticate, requireVerifiedEmail } = require("../middleware/auth");
 const { sendPushToUser } = require("../lib/push");
 const chatBus = require("../lib/chatBus");
+const { PUBLIC_USER_SELECT, toPublicUser } = require("../lib/publicUser");
 
 const router = express.Router();
 router.use(authenticate);
@@ -37,8 +38,6 @@ async function notifyTarget(meId, targetId, title, bodyFor, eventType) {
   notify(targetId, title, bodyFor(me.name || me.email));
   publishFriendEvent(targetId, eventType);
 }
-
-const PUBLIC_USER_SELECT = { id: true, publicId: true, name: true, email: true };
 
 function pair(a, b) {
   return { userAId: Math.min(a, b), userBId: Math.max(a, b) };
@@ -89,7 +88,7 @@ router.get("/lookup", async (req, res) => {
     }
   }
 
-  res.json({ ...target, relationship });
+  res.json({ ...(await toPublicUser(target)), relationship });
 });
 
 // --- Friends list -----------------------------------------------------------
@@ -102,7 +101,25 @@ router.get("/", async (req, res) => {
     orderBy: { respondedAt: "desc" },
   });
 
-  res.json(rows.map((r) => ({ friendshipId: r.id, otherUser: otherUserOf(r, meId), since: r.respondedAt })));
+  // `isOnline` is a point-in-time read of who has an SSE stream open right
+  // now (chatBus.hasSubscribers), answered at fetch time rather than pushed
+  // as its own live event — the friends list already refetches on every
+  // "friend" event, and a presence broadcast would mean fanning every
+  // connect/disconnect out to every friend of that user for a dot. Inherits
+  // chatBus's single-process caveat: on more than one instance this only
+  // sees the current process's connections.
+  const data = await Promise.all(
+    rows.map(async (r) => {
+      const other = otherUserOf(r, meId);
+      return {
+        friendshipId: r.id,
+        otherUser: { ...(await toPublicUser(other)), isOnline: chatBus.hasSubscribers(other.id) },
+        since: r.respondedAt,
+      };
+    })
+  );
+
+  res.json(data);
 });
 
 // --- Requests -----------------------------------------------------------------
@@ -118,7 +135,11 @@ router.get("/requests", async (req, res) => {
   const incoming = [];
   const outgoing = [];
   for (const r of rows) {
-    const entry = { requestId: r.id, otherUser: otherUserOf(r, meId), createdAt: r.createdAt };
+    const entry = {
+      requestId: r.id,
+      otherUser: await toPublicUser(otherUserOf(r, meId)),
+      createdAt: r.createdAt,
+    };
     (r.requestedById === meId ? outgoing : incoming).push(entry);
   }
 

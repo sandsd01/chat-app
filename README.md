@@ -59,6 +59,10 @@ All routes are namespaced under `/api`.
 | PATCH | `/api/auth/password` | required | Change your own password |
 | POST | `/api/auth/forgot-password` | — | Request a reset link (always a generic response, to avoid account enumeration) |
 | POST | `/api/auth/reset-password` | — | Reset with a valid, unexpired token |
+| PATCH | `/api/users/me` | required | Update your own profile: `publicId` (one-time only) and/or `statusMessage` (≤80 chars, blank/null clears it). Each field is independent — a status update still works after the custom ID is spent |
+| POST | `/api/users/me/avatar/upload-url` | required | Mint a presigned PUT for a new avatar (`{ mimeType, size }`, images only, ≤2MB); `503` if R2 isn't configured |
+| PUT | `/api/users/me/avatar` | required | Confirm the upload landed and set it as your avatar (`{ key }`) — the key is re-checked against your own `avatars/<your id>/` prefix and re-verified against R2 |
+| DELETE | `/api/users/me/avatar` | required | Clear your avatar (the stored object itself is left alone) |
 | DELETE | `/api/users/me` | required | Delete your own account (`409` if you have chat history) |
 
 Signing in with Google auto-links to an existing password account with the
@@ -109,7 +113,9 @@ sending new messages is blocked.
 |---|---|---|---|
 | GET | `/api/push/vapid-public-key` | required | The server's VAPID public key, for `PushManager.subscribe()`; `503` if push isn't configured (no `VAPID_*` env vars) |
 | POST | `/api/push/subscribe` | required | Register a browser's `PushSubscription` (`{ subscription: { endpoint, keys: { p256dh, auth } } }`) — upserts on `endpoint`, so re-subscribing the same browser replaces rather than duplicates |
-| POST | `/api/push/unsubscribe` | required | Remove your own subscription by `{ endpoint }` |
+| POST | `/api/push/unsubscribe` | required | Remove your own subscription by `{ endpoint }` — only ever the browser making the call |
+| GET | `/api/push/subscriptions` | required | Every browser you've enabled notifications in, as `{ id, device, createdAt }`; never the endpoint or key material |
+| DELETE | `/api/push/subscriptions/:id` | required | Revoke one of your own devices from any browser (`404` for an id you don't own) |
 
 A new chat message triggers a push **only** to a recipient with no live SSE
 connection open — someone with the app open in a tab gets the message over

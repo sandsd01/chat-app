@@ -6,7 +6,7 @@ import { useChat } from '../context/ChatContext'
 import { useFriends } from '../context/FriendsContext'
 import { lookupByPublicId } from '../api/friends'
 import { TicketId } from '../components/TicketId'
-import { initials } from '../lib/format'
+import { Avatar } from '../components/Avatar'
 import { useDocumentTitle } from '../hooks/useDocumentTitle'
 
 export function FriendsPage() {
@@ -117,10 +117,13 @@ export function FriendsPage() {
         {actionError && <p className="error" role="alert">{actionError}</p>}
         {lookupResult && (
           <div className="friend-row" role="status" aria-live="polite">
-            <span className="chat-avatar">{initials(lookupResult.name || lookupResult.email)}</span>
+            <Avatar user={lookupResult} />
             <span className="chat-conversation-main">
               <span className="chat-conversation-name">{lookupResult.name || lookupResult.email}</span>
               <span className="chat-conversation-preview">{lookupResult.publicId}</span>
+              {lookupResult.statusMessage && (
+                <span className="user-status-line">{lookupResult.statusMessage}</span>
+              )}
             </span>
             {lookupResult.relationship === 'none' && (
               <button type="button" onClick={handleSendFromLookup}>
@@ -147,9 +150,12 @@ export function FriendsPage() {
               <div className="chat-list-section-label">{t('friends.incoming')}</div>
               {incoming.map((r) => (
                 <div className="friend-row" key={r.requestId}>
-                  <span className="chat-avatar">{initials(r.otherUser.name || r.otherUser.email)}</span>
+                  <Avatar user={r.otherUser} />
                   <span className="chat-conversation-main">
                     <span className="chat-conversation-name">{r.otherUser.name || r.otherUser.email}</span>
+                    {r.otherUser.statusMessage && (
+                      <span className="user-status-line">{r.otherUser.statusMessage}</span>
+                    )}
                   </span>
                   <button
                     type="button"
@@ -175,9 +181,12 @@ export function FriendsPage() {
               <div className="chat-list-section-label">{t('friends.outgoing')}</div>
               {outgoing.map((r) => (
                 <div className="friend-row" key={r.requestId}>
-                  <span className="chat-avatar">{initials(r.otherUser.name || r.otherUser.email)}</span>
+                  <Avatar user={r.otherUser} />
                   <span className="chat-conversation-main">
                     <span className="chat-conversation-name">{r.otherUser.name || r.otherUser.email}</span>
+                    {r.otherUser.statusMessage && (
+                      <span className="user-status-line">{r.otherUser.statusMessage}</span>
+                    )}
                   </span>
                   <span className="friends-caption">{t('friends.requestPending')}</span>
                   <button
@@ -205,9 +214,15 @@ export function FriendsPage() {
         ) : (
           friends.map((f) => (
             <div className="friend-row" key={f.friendshipId}>
-              <span className="chat-avatar">{initials(f.otherUser.name || f.otherUser.email)}</span>
+              <Avatar user={f.otherUser} isOnline={f.otherUser.isOnline} />
               <span className="chat-conversation-main">
-                <span className="chat-conversation-name">{f.otherUser.name || f.otherUser.email}</span>
+                <span className="chat-conversation-name">
+                  {f.otherUser.name || f.otherUser.email}
+                  {f.otherUser.isOnline && <span className="sr-only"> · {t('presence.online')}</span>}
+                </span>
+                {f.otherUser.statusMessage && (
+                  <span className="user-status-line">{f.otherUser.statusMessage}</span>
+                )}
               </span>
               <button
                 type="button"
