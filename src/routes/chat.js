@@ -1,4 +1,3 @@
-const crypto = require("crypto");
 const express = require("express");
 const prisma = require("../../prisma/client");
 const { authenticate } = require("../middleware/auth");
@@ -7,6 +6,7 @@ const { areFriends } = require("./friends");
 const { sendPushToUser } = require("../lib/push");
 const { readArchivedMessages } = require("../lib/drive");
 const { attachmentsConfigured, createUploadUrl, verifyUploadedObject, createDownloadUrl } = require("../lib/attachments");
+const { createTicketStore } = require("../lib/ticketStore");
 
 const router = express.Router();
 
@@ -16,36 +16,15 @@ const PUBLIC_USER_SELECT = { id: true, name: true, email: true };
 // EventSource can't set an Authorization header, so GET /stream can't go
 // through the normal JWT middleware. Instead an authenticated client first
 // calls POST /stream-ticket to mint a short-lived, single-use ticket, then
-// opens the EventSource against /stream?ticket=... . Tickets live only in
-// this process's memory (fine for a single-container deploy, same caveat as
-// chatBus) and are deleted the moment they're consumed or expire.
-const TICKET_TTL_MS = 30 * 1000;
-const tickets = new Map(); // ticket -> { userId, expiresAt }
-
-function issueTicket(userId) {
-  const ticket = crypto.randomBytes(24).toString("hex");
-  const expiresAt = Date.now() + TICKET_TTL_MS;
-  tickets.set(ticket, { userId, expiresAt });
-  const timer = setTimeout(() => tickets.delete(ticket), TICKET_TTL_MS);
-  timer.unref?.();
-  return ticket;
-}
-
-/** Single-use: returns the associated userId and removes the ticket, or null. */
-function consumeTicket(ticket) {
-  const entry = tickets.get(ticket);
-  if (!entry) return null;
-  tickets.delete(ticket);
-  if (entry.expiresAt < Date.now()) return null;
-  return entry.userId;
-}
+// opens the EventSource against /stream?ticket=... .
+const streamTickets = createTicketStore(30 * 1000);
 
 // Must be registered before router.use(authenticate) below so a request for
 // this exact path never hits the JWT check — it authenticates itself via the
 // ticket instead.
 router.get("/stream", (req, res) => {
   const ticket = typeof req.query.ticket === "string" ? req.query.ticket : "";
-  const userId = ticket ? consumeTicket(ticket) : null;
+  const userId = ticket ? streamTickets.consume(ticket) : null;
   if (!userId) {
     return res.status(401).json({ error: "Invalid or expired ticket" });
   }
@@ -490,12 +469,17 @@ router.post("/conversations/:id/messages", async (req, res) => {
   res.status(201).json(ssePayload);
 });
 
-async function getOwnMessage(conversationId, messageId, userId) {
-  if (!Number.isInteger(messageId)) return { status: 404 };
+/** "Does this message belong to this conversation" check shared by every route below keyed on :messageId. */
+async function getMessageInConversation(conversationId, messageId) {
+  if (!Number.isInteger(messageId)) return null;
   const message = await prisma.message.findUnique({ where: { id: messageId } });
-  if (!message || message.conversationId !== conversationId || message.deletedAt) {
-    return { status: 404 };
-  }
+  if (!message || message.conversationId !== conversationId || message.deletedAt) return null;
+  return message;
+}
+
+async function getOwnMessage(conversationId, messageId, userId) {
+  const message = await getMessageInConversation(conversationId, messageId);
+  if (!message) return { status: 404 };
   if (message.senderId !== userId) return { status: 403 };
   return { message };
 }
@@ -585,14 +569,6 @@ async function reactionsForMessages(messageIds, meId) {
     result.set(messageId, [...byEmoji.values()]);
   }
   return result;
-}
-
-/** Same "does this message belong to this conversation" check edit/delete use, minus the sender-only restriction. */
-async function getMessageInConversation(conversationId, messageId) {
-  if (!Number.isInteger(messageId)) return null;
-  const message = await prisma.message.findUnique({ where: { id: messageId } });
-  if (!message || message.conversationId !== conversationId || message.deletedAt) return null;
-  return message;
 }
 
 router.post("/conversations/:id/messages/:messageId/reactions", async (req, res) => {
@@ -700,7 +676,7 @@ router.post("/conversations/:id/read", async (req, res) => {
 });
 
 router.post("/stream-ticket", (req, res) => {
-  const ticket = issueTicket(req.user.id);
+  const ticket = streamTickets.issue(req.user.id);
   res.json({ ticket });
 });
 

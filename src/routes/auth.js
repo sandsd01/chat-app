@@ -9,6 +9,7 @@ const { authLimiter } = require("../middleware/rateLimit");
 const { sendPasswordResetEmail, sendVerificationEmail } = require("../lib/email");
 const { captchaConfigured, siteKey: captchaSiteKey, verifyCaptcha } = require("../lib/captcha");
 const { createUserWithUniquePublicId } = require("../lib/publicId");
+const { createTicketStore } = require("../lib/ticketStore");
 
 const router = express.Router();
 
@@ -91,30 +92,11 @@ const oauthClient = googleConfigured
 const OAUTH_STATE_COOKIE = "g_oauth_state";
 const OAUTH_STATE_TTL_MS = 5 * 60 * 1000;
 
-// Single-use, 30-second login ticket, exactly the same in-memory-Map shape as
-// src/routes/chat.js's SSE ticket — a full top-level browser redirect back
-// from Google can't hand the SPA a JWT directly without it sitting in the
-// URL (history, Referer, server logs), so the callback mints one of these
-// instead and the SPA exchanges it for the real token from JS.
-const LOGIN_TICKET_TTL_MS = 30 * 1000;
-const loginTickets = new Map(); // ticket -> { userId, expiresAt }
-
-function issueLoginTicket(userId) {
-  const ticket = crypto.randomBytes(24).toString("hex");
-  const expiresAt = Date.now() + LOGIN_TICKET_TTL_MS;
-  loginTickets.set(ticket, { userId, expiresAt });
-  const timer = setTimeout(() => loginTickets.delete(ticket), LOGIN_TICKET_TTL_MS);
-  timer.unref?.();
-  return ticket;
-}
-
-function consumeLoginTicket(ticket) {
-  const entry = loginTickets.get(ticket);
-  if (!entry) return null;
-  loginTickets.delete(ticket);
-  if (entry.expiresAt < Date.now()) return null;
-  return entry.userId;
-}
+// Single-use, 30-second login ticket — a full top-level browser redirect
+// back from Google can't hand the SPA a JWT directly without it sitting in
+// the URL (history, Referer, server logs), so the callback mints one of
+// these instead and the SPA exchanges it for the real token from JS.
+const loginTickets = createTicketStore(30 * 1000);
 
 router.get("/google", (_req, res) => {
   if (!googleConfigured) {
@@ -189,13 +171,13 @@ router.get("/google/callback", async (req, res) => {
     }
   }
 
-  const loginTicket = issueLoginTicket(user.id);
+  const loginTicket = loginTickets.issue(user.id);
   res.redirect(`${appUrl()}/oauth-callback?ticket=${loginTicket}`);
 });
 
 router.post("/google/exchange", async (req, res) => {
   const { ticket } = req.body || {};
-  const userId = typeof ticket === "string" ? consumeLoginTicket(ticket) : null;
+  const userId = typeof ticket === "string" ? loginTickets.consume(ticket) : null;
   if (!userId) return res.status(401).json({ error: "Invalid or expired ticket" });
 
   const user = await prisma.user.findUnique({ where: { id: userId } });
