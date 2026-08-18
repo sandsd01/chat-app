@@ -122,3 +122,7 @@ export function unmuteConversation(conversationId, token) {
 export function getStreamTicket(token) {
   return apiFetch('/chat/stream-ticket', { method: 'POST', token })
 }
+
+export function exportConversation(conversationId, token) {
+  return apiFetch(`/chat/conversations/${conversationId}/export`, { token })
+}

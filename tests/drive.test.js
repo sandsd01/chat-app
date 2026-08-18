@@ -606,4 +606,90 @@ describe("Google Drive backup", () => {
       assert.equal(res.status, 400);
     });
   });
+
+  describe("GET /chat/conversations/:id/export", () => {
+    test("requires authentication", async () => {
+      const res = await request(app).get("/api/chat/conversations/1/export");
+      assert.equal(res.status, 401);
+    });
+
+    test("404s for a non-participant", async () => {
+      const conversation = await makeConversation(alice, bob);
+      await createUser({ email: "carol@test.com", password: "carolpass1" });
+      const carolToken = await login("carol@test.com", "carolpass1");
+
+      const res = await request(app)
+        .get(`/api/chat/conversations/${conversation.id}/export`)
+        .set("Authorization", `Bearer ${carolToken}`);
+      assert.equal(res.status, 404);
+    });
+
+    test("exports Postgres-only messages oldest-first, as a downloadable attachment", async () => {
+      const conversation = await makeConversation(alice, bob);
+      await sendMessage(conversation, alice, "first");
+      const second = await sendMessage(conversation, bob, "second");
+      await prisma.message.update({ where: { id: second.id }, data: { body: null, deletedAt: new Date() } });
+      await sendMessage(conversation, alice, "third");
+
+      const res = await request(app)
+        .get(`/api/chat/conversations/${conversation.id}/export`)
+        .set("Authorization", `Bearer ${aliceToken}`);
+      assert.equal(res.status, 200);
+      assert.match(res.headers["content-disposition"], /attachment/);
+      assert.equal(res.body.conversationId, conversation.id);
+      assert.deepEqual(
+        res.body.messages.map((m) => m.body),
+        ["first", null, "third"]
+      );
+      assert.ok(res.body.messages[1].deletedAt, "the deleted message keeps its deletedAt, not silently dropped");
+    });
+
+    test("continues into the caller's own Drive archive for messages Postgres has already pruned, oldest-first across both sources", async (t) => {
+      installFakeDrive(t);
+      await prisma.user.update({
+        where: { id: alice.id },
+        data: { driveRefreshTokenEnc: encryptSecret("refresh-token"), driveConnectedAt: new Date() },
+      });
+      const conversation = await makeConversation(alice, bob);
+      await sendMessage(conversation, alice, "archived first");
+      await sendMessage(conversation, bob, "archived second");
+      await archiveUserConversations(alice.id);
+      await prisma.message.deleteMany({ where: { conversationId: conversation.id } });
+      await sendMessage(conversation, alice, "still in postgres");
+
+      const res = await request(app)
+        .get(`/api/chat/conversations/${conversation.id}/export`)
+        .set("Authorization", `Bearer ${aliceToken}`);
+      assert.equal(res.status, 200);
+      assert.deepEqual(
+        res.body.messages.map((m) => m.body),
+        ["archived first", "archived second", "still in postgres"]
+      );
+    });
+
+    test("502s if reading the Drive archive fails, rather than silently returning a partial export", async (t) => {
+      // A real archiveFile row (not installFakeDrive's Postgres-write path,
+      // which is mocked once already for other tests in this file and
+      // can't be re-mocked) — just enough for readArchivedMessages to reach
+      // the token-refresh step this test wants to fail.
+      await prisma.user.update({
+        where: { id: alice.id },
+        data: { driveRefreshTokenEnc: encryptSecret("refresh-token"), driveConnectedAt: new Date() },
+      });
+      const conversation = await makeConversation(alice, bob);
+      await prisma.driveArchiveFile.create({
+        data: { userId: alice.id, conversationId: conversation.id, driveFileId: "fake-file-id", lastArchivedMessageId: 0 },
+      });
+      await sendMessage(conversation, alice, "in postgres");
+
+      t.mock.method(OAuth2Client.prototype, "getAccessToken", async () => {
+        throw new Error("token refresh failed");
+      });
+
+      const res = await request(app)
+        .get(`/api/chat/conversations/${conversation.id}/export`)
+        .set("Authorization", `Bearer ${aliceToken}`);
+      assert.equal(res.status, 502);
+    });
+  });
 });

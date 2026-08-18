@@ -16,6 +16,7 @@ import {
   searchMessages,
   addReaction,
   removeReaction,
+  exportConversation,
 } from '../api/chat'
 import { useDriveBackup } from '../hooks/useDriveBackup'
 import { useDocumentTitle } from '../hooks/useDocumentTitle'
@@ -169,6 +170,8 @@ export function ChatPage() {
   const [uploadBusy, setUploadBusy] = useState(false)
   const [uploadError, setUploadError] = useState(null)
   const fileInputRef = useRef(null)
+  const [exportBusy, setExportBusy] = useState(false)
+  const [exportError, setExportError] = useState(null)
 
   const messagesElRef = useRef(null)
   const isAtBottomRef = useRef(true)
@@ -559,11 +562,34 @@ export function ChatPage() {
     }
   }
 
+  async function handleExport(conversationId) {
+    setExportError(null)
+    setExportBusy(true)
+    try {
+      const result = await exportConversation(conversationId, token)
+      // The route already sends Content-Disposition: attachment, but that
+      // only matters for a plain `<a href>` navigation — a fetch() response
+      // (which apiFetch always is) never triggers a browser download on its
+      // own, so the file has to be built and "clicked" here instead.
+      const blob = new Blob([JSON.stringify(result, null, 2)], { type: 'application/json' })
+      const url = URL.createObjectURL(blob)
+      const link = document.createElement('a')
+      link.href = url
+      link.download = `conversation-${conversationId}.json`
+      link.click()
+      URL.revokeObjectURL(url)
+    } catch (err) {
+      setExportError(err.message)
+    } finally {
+      setExportBusy(false)
+    }
+  }
+
   function handleRetry(tempId) {
     const msg = messages.find((m) => m.id === tempId)
     if (!msg) return
     setMessages((prev) => prev.map((m) => (m.id === tempId ? { ...m, pending: true, failed: false } : m)))
-    attemptSend(activeConversationId, msg.body, tempId)
+    attemptSend(activeConversationId, msg.body, tempId, msg.replyTo?.id ?? null)
   }
 
   const threadHeaderName = activeConversation
@@ -730,6 +756,15 @@ export function ChatPage() {
                     {activeConversation.muted ? '🔕' : '🔔'}
                   </button>
                 )}
+                <button
+                  type="button"
+                  className="chat-thread-search-btn"
+                  aria-label={t('chat.exportConversation')}
+                  disabled={exportBusy}
+                  onClick={() => handleExport(activeConversationId)}
+                >
+                  {exportBusy ? '⏳' : '⬇️'}
+                </button>
                 <button
                   type="button"
                   className="chat-thread-search-btn"
@@ -1033,6 +1068,7 @@ export function ChatPage() {
                 </div>
               )}
 
+              {exportError && <p className="error" role="alert">{exportError}</p>}
               {uploadError && <p className="error" role="alert">{uploadError}</p>}
               <form className="chat-composer" onSubmit={handleSend}>
                 <div className="chat-composer-emoji-wrap">

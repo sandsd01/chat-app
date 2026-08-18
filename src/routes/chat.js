@@ -374,6 +374,86 @@ router.get("/conversations/:id/messages/drive-history", async (req, res) => {
   }
 });
 
+const EXPORT_PAGE_SIZE = 100;
+
+/**
+ * Every message in a conversation the caller can currently see — Postgres
+ * first (walking the same before-cursor pagination GET .../messages uses),
+ * then the caller's own Drive archive for anything already pruned once
+ * Postgres runs out, handing off the cursor exactly like
+ * GET .../messages/drive-history does. Normalizes both sources into one
+ * flat, portable shape (no presigned attachment URLs — this is a point-in-
+ * time export, not a live view) and returns oldest-first, like a transcript.
+ */
+async function collectAllMessagesForExport(userId, conversationId) {
+  const rows = [];
+  let before;
+
+  for (;;) {
+    const page = await prisma.message.findMany({
+      where: { conversationId, ...(before !== undefined ? { id: { lt: before } } : {}) },
+      orderBy: [{ createdAt: "desc" }, { id: "desc" }],
+      take: EXPORT_PAGE_SIZE,
+    });
+    if (page.length === 0) break;
+    for (const m of page) {
+      rows.push({
+        id: m.id,
+        senderId: m.senderId,
+        body: m.body,
+        createdAt: m.createdAt,
+        editedAt: m.editedAt,
+        deletedAt: m.deletedAt,
+        hasAttachment: Boolean(m.attachmentKey),
+        attachmentName: m.attachmentName,
+      });
+    }
+    before = page[page.length - 1].id;
+    if (page.length < EXPORT_PAGE_SIZE) break;
+  }
+
+  // readArchivedMessages returns an empty page rather than erroring when
+  // Drive isn't connected, so this is safe to call unconditionally.
+  for (;;) {
+    const page = await readArchivedMessages(userId, conversationId, { before, limit: EXPORT_PAGE_SIZE });
+    for (const m of page.data) {
+      rows.push({
+        id: m.id,
+        senderId: m.senderId,
+        body: m.body,
+        createdAt: m.createdAt,
+        // An archived line has no edit/delete history of its own — it's a
+        // point-in-time record of what got written that sweep.
+        editedAt: null,
+        deletedAt: null,
+        hasAttachment: m.hasAttachment,
+        attachmentName: m.attachmentName,
+      });
+    }
+    if (!page.hasMore) break;
+    before = page.nextBefore;
+  }
+
+  return rows.reverse();
+}
+
+router.get("/conversations/:id/export", async (req, res) => {
+  const conversationId = Number(req.params.id);
+  const conversation = await getConversationForParticipant(conversationId, req.user.id);
+  if (!conversation) return res.status(404).json({ error: "Conversation not found" });
+
+  let messages;
+  try {
+    messages = await collectAllMessagesForExport(req.user.id, conversationId);
+  } catch (err) {
+    console.error("Conversation export failed:", err.message);
+    return res.status(502).json({ error: "Could not read your Google Drive archive" });
+  }
+
+  res.setHeader("Content-Disposition", `attachment; filename="conversation-${conversationId}.json"`);
+  res.json({ conversationId, exportedAt: new Date(), messages });
+});
+
 router.post("/conversations/:id/messages", async (req, res) => {
   const conversationId = Number(req.params.id);
   const conversation = await getConversationForParticipant(conversationId, req.user.id);
