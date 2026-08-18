@@ -5,6 +5,7 @@ import { useLanguage } from '../context/LanguageContext'
 import { apiFetch } from '../api/client'
 import { Turnstile } from '../components/Turnstile'
 import { AuthBrand } from '../components/AuthBrand'
+import { useDocumentTitle } from '../hooks/useDocumentTitle'
 
 export function SignupPage() {
   const [email, setEmail] = useState('')
@@ -15,6 +16,7 @@ export function SignupPage() {
   const { signup } = useAuth()
   const { t } = useLanguage()
   const navigate = useNavigate()
+  useDocumentTitle(t('signup.title'))
 
   // Unauthenticated on purpose — the signup page has no session yet. Stays
   // null (rather than defaulting to "not configured") while the request is

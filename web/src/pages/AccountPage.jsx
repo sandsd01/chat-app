@@ -7,6 +7,7 @@ import { useLanguage } from '../context/LanguageContext'
 import { usePushSubscription } from '../hooks/usePushSubscription'
 import { useDriveBackup } from '../hooks/useDriveBackup'
 import { TicketId } from '../components/TicketId'
+import { useDocumentTitle } from '../hooks/useDocumentTitle'
 
 const PUBLIC_ID_PATTERN = /^[a-zA-Z0-9]{4,20}$/
 
@@ -21,6 +22,7 @@ export function AccountPage() {
   const { token, user, updateUser, logout } = useAuth()
   const { t } = useLanguage()
   const navigate = useNavigate()
+  useDocumentTitle(t('account.title'))
   const [currentPassword, setCurrentPassword] = useState('')
   const [newPassword, setNewPassword] = useState('')
   const [error, setError] = useState(null)
@@ -155,6 +157,7 @@ export function AccountPage() {
                   value={customId}
                   onChange={(e) => setCustomId(e.target.value)}
                   placeholder={t('account.customIdPlaceholder')}
+                  aria-label={t('account.customIdPlaceholder')}
                   maxLength={20}
                 />
                 <button type="button" className="btn-secondary" disabled={customIdBusy} onClick={handleSetCustomId}>

@@ -11,10 +11,13 @@ export function TicketId({ id, copyLabel, copiedLabel, copyable = true }) {
   const [copied, setCopied] = useState(false)
 
   function handleCopy() {
-    navigator.clipboard?.writeText(id).then(() => {
-      setCopied(true)
-      setTimeout(() => setCopied(false), 1500)
-    })
+    navigator.clipboard?.writeText(id).then(
+      () => {
+        setCopied(true)
+        setTimeout(() => setCopied(false), 1500)
+      },
+      (err) => console.error('Copy failed:', err)
+    )
   }
 
   return (

@@ -3,9 +3,11 @@ import { Link, useSearchParams } from 'react-router-dom'
 import { apiFetch } from '../api/client'
 import { useLanguage } from '../context/LanguageContext'
 import { AuthBrand } from '../components/AuthBrand'
+import { useDocumentTitle } from '../hooks/useDocumentTitle'
 
 export function ResetPasswordPage() {
   const { t } = useLanguage()
+  useDocumentTitle(t('resetPassword.title'))
   const [searchParams] = useSearchParams()
   const email = searchParams.get('email')
   const token = searchParams.get('token')

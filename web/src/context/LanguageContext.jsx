@@ -1,10 +1,17 @@
-import { createContext, useCallback, useContext, useState } from 'react'
+import { createContext, useCallback, useContext, useEffect, useState } from 'react'
 import { translations } from '../i18n/translations'
 
 const LanguageContext = createContext(null)
 
 export function LanguageProvider({ children }) {
   const [language, setLanguage] = useState(() => localStorage.getItem('language') || 'en')
+
+  // Keeps screen readers on the right pronunciation profile — without this,
+  // <html lang> stays at index.html's static "en" no matter what the app
+  // itself is rendering.
+  useEffect(() => {
+    document.documentElement.lang = language
+  }, [language])
 
   const changeLanguage = useCallback((lang) => {
     setLanguage(lang)

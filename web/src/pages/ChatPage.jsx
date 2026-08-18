@@ -18,6 +18,7 @@ import {
   removeReaction,
 } from '../api/chat'
 import { useDriveBackup } from '../hooks/useDriveBackup'
+import { useDocumentTitle } from '../hooks/useDocumentTitle'
 import { EmojiPicker } from '../components/EmojiPicker'
 import { initials, localeFor } from '../lib/format'
 
@@ -549,6 +550,8 @@ export function ChatPage() {
     ? activeConversation.otherUser.name || activeConversation.otherUser.email
     : t('common.loading')
 
+  useDocumentTitle(activeConversation ? threadHeaderName : t('nav.chat'))
+
   // Only the caller's most recent (sent, non-failed) message gets a "Read"
   // tick — matching how WhatsApp/Telegram/etc. show it once per thread
   // rather than on every message the other side has read.
@@ -696,7 +699,23 @@ export function ChatPage() {
                     aria-label={t('chat.searchInConversationPlaceholder')}
                     value={searchQuery}
                     onChange={(e) => setSearchQuery(e.target.value)}
+                    onKeyDown={(e) => {
+                      if (e.key !== 'Escape') return
+                      setSearchOpen(false)
+                      setSearchQuery('')
+                    }}
                   />
+                  <button
+                    type="button"
+                    className="chat-thread-search-btn"
+                    aria-label={t('chat.closeSearch')}
+                    onClick={() => {
+                      setSearchOpen(false)
+                      setSearchQuery('')
+                    }}
+                  >
+                    ✕
+                  </button>
                 </div>
               )}
 
@@ -772,8 +791,18 @@ export function ChatPage() {
                                   type="text"
                                   value={editingDraft}
                                   onChange={(e) => setEditingDraft(e.target.value)}
+                                  aria-label={t('chat.editMessage')}
                                   maxLength={4000}
                                   autoFocus
+                                  onKeyDown={(e) => {
+                                    if (e.key === 'Enter') {
+                                      e.preventDefault()
+                                      if (editingDraft.trim()) saveEdit(m.id)
+                                    } else if (e.key === 'Escape') {
+                                      e.preventDefault()
+                                      cancelEdit()
+                                    }
+                                  }}
                                 />
                                 <div className="chat-bubble-edit-actions">
                                   <button type="button" onClick={() => saveEdit(m.id)} disabled={!editingDraft.trim()}>

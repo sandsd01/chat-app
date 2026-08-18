@@ -7,10 +7,12 @@ import { useFriends } from '../context/FriendsContext'
 import { lookupByPublicId } from '../api/friends'
 import { TicketId } from '../components/TicketId'
 import { initials } from '../lib/format'
+import { useDocumentTitle } from '../hooks/useDocumentTitle'
 
 export function FriendsPage() {
   const { token, user } = useAuth()
   const { t } = useLanguage()
+  useDocumentTitle(t('friends.title'))
   const { startChat } = useChat()
   const {
     friends,

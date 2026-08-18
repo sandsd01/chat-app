@@ -4,10 +4,12 @@ import { apiFetch } from '../api/client'
 import { useAuth } from '../context/AuthContext'
 import { useLanguage } from '../context/LanguageContext'
 import { AuthBrand } from '../components/AuthBrand'
+import { useDocumentTitle } from '../hooks/useDocumentTitle'
 
 // 'pending' | 'success' | 'error'
 export function VerifyEmailPage() {
   const { t } = useLanguage()
+  useDocumentTitle(t('verifyEmail.title'))
   const { user, updateUser } = useAuth()
   const [searchParams] = useSearchParams()
   const email = searchParams.get('email')

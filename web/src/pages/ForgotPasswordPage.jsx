@@ -3,9 +3,11 @@ import { Link } from 'react-router-dom'
 import { apiFetch } from '../api/client'
 import { useLanguage } from '../context/LanguageContext'
 import { AuthBrand } from '../components/AuthBrand'
+import { useDocumentTitle } from '../hooks/useDocumentTitle'
 
 export function ForgotPasswordPage() {
   const { t } = useLanguage()
+  useDocumentTitle(t('forgotPassword.title'))
   const [email, setEmail] = useState('')
   const [message, setMessage] = useState(null)
   const [error, setError] = useState(null)

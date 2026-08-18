@@ -1043,9 +1043,16 @@ label {
 
 .chat-search-bar {
   flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  gap: 8px;
   padding: 8px 16px;
   border-bottom: 1px solid var(--border);
   background: var(--bg-raised);
+}
+
+.chat-search-bar .search-input {
+  flex: 1;
 }
 
 .chat-search-result-row {
