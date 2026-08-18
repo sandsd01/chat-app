@@ -383,6 +383,13 @@ router.post("/conversations/:id/messages", async (req, res) => {
     return res.status(403).json({ error: "You can only message accounts you're friends with" });
   }
 
+  // Captured once, before the message is even created, and reused below for
+  // both the "delivered" flag and the push-skip check — the recipient could
+  // in principle connect or disconnect in the gap between two separate
+  // hasSubscribers() calls, and the two would then disagree about whether
+  // the same message SSE-delivered at send time.
+  const deliveredAtSend = chatBus.hasSubscribers(otherUserId);
+
   const rawBody = typeof req.body?.body === "string" ? req.body.body.trim() : "";
   const attachmentKey = typeof req.body?.attachmentKey === "string" ? req.body.attachmentKey : null;
   const attachmentName = typeof req.body?.attachmentName === "string" ? req.body.attachmentName : null;
@@ -446,6 +453,14 @@ router.post("/conversations/:id/messages", async (req, res) => {
     attachmentMimeType: message.attachmentMimeType,
     attachmentSize: message.attachmentSize,
     attachmentType: message.attachmentType,
+    // True only if the recipient's device had a live SSE connection open at
+    // the moment this was sent — it does not upgrade later if they connect
+    // afterwards but before reading, unlike a real delivery receipt. That's
+    // an intentional scope cut: upgrading it would need a second signal
+    // path (e.g. published on every new /stream connection), and the
+    // sender already gets the strictly-stronger "Read" tick once they do
+    // read it.
+    delivered: deliveredAtSend,
   };
 
   const attachmentUrl = payload.attachmentKey
@@ -467,7 +482,7 @@ router.post("/conversations/:id/messages", async (req, res) => {
   // count, so this check has no effect on anything above. Fired without
   // awaiting: a slow or failing push must never delay the response the
   // sender is waiting on.
-  if (!chatBus.hasSubscribers(otherUserId) && !myMutedAt(conversation, otherUserId)) {
+  if (!deliveredAtSend && !myMutedAt(conversation, otherUserId)) {
     prisma.user
       .findUnique({ where: { id: req.user.id }, select: { name: true, email: true } })
       .then((sender) => {

@@ -582,6 +582,27 @@ describe("Chat API", () => {
       const after = await prisma.conversation.findUnique({ where: { id: conv.body.id } });
       assert.ok(after.lastMessageAt, "lastMessageAt must be set after a message is sent");
     });
+
+    test("delivered is true when the recipient has a live SSE connection open at send time, false otherwise", async () => {
+      const conv = await createConversation(adminToken, staffUser.id);
+
+      const notDelivered = await request(app)
+        .post(`/api/chat/conversations/${conv.body.id}/messages`)
+        .set("Authorization", `Bearer ${adminToken}`)
+        .send({ body: "staff isn't connected" });
+      assert.equal(notDelivered.body.delivered, false);
+
+      const unsubscribe = chatBus.subscribe(staffUser.id, () => {});
+      try {
+        const delivered = await request(app)
+          .post(`/api/chat/conversations/${conv.body.id}/messages`)
+          .set("Authorization", `Bearer ${adminToken}`)
+          .send({ body: "staff is connected now" });
+        assert.equal(delivered.body.delivered, true);
+      } finally {
+        unsubscribe();
+      }
+    });
   });
 
   describe("PATCH /chat/conversations/:id/messages/:messageId", () => {

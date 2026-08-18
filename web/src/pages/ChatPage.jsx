@@ -879,12 +879,16 @@ export function ChatPage() {
                                 {m.editedAt && <span className="chat-bubble-edited-tag"> {t('chat.edited')}</span>}
                                 <span className="chat-bubble-time">
                                   {formatTime(m.createdAt, language)}
-                                  {mine &&
-                                    m.id === lastMineMessageId &&
-                                    otherLastReadAt &&
-                                    otherLastReadAt >= new Date(m.createdAt) && (
-                                      <span className="chat-bubble-read-tag"> · {t('chat.read')}</span>
-                                    )}
+                                  {mine && m.id === lastMineMessageId && (() => {
+                                    const isRead = otherLastReadAt && otherLastReadAt >= new Date(m.createdAt)
+                                    if (isRead) return <span className="chat-bubble-read-tag"> · {t('chat.read')}</span>
+                                    // Only known for a message sent this session (see the
+                                    // src/routes/chat.js comment on `delivered` — it isn't
+                                    // persisted, so a page reload loses it and the tag just
+                                    // stops showing rather than showing something false).
+                                    if (m.delivered) return <span className="chat-bubble-read-tag"> · {t('chat.delivered')}</span>
+                                    return null
+                                  })()}
                                 </span>
                               </div>
                             )}
