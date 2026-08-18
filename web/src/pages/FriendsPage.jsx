@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useMemo, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { useAuth } from '../context/AuthContext'
 import { useLanguage } from '../context/LanguageContext'
@@ -38,6 +38,21 @@ export function FriendsPage() {
   // actions on the same row (Remove vs Block) don't both light up as busy
   // when only one of them was actually clicked.
   const [busyKey, setBusyKey] = useState(null)
+  const [friendFilter, setFriendFilter] = useState('')
+
+  // Client-side only, over the already-loaded friends list — not a new
+  // backend search. A server-side directory search was deliberately removed
+  // elsewhere in this app for privacy (see CLAUDE.md); filtering your own
+  // already-accepted friends by name/email raises none of that concern.
+  const filteredFriends = useMemo(() => {
+    const q = friendFilter.trim().toLowerCase()
+    if (!q) return friends
+    return friends.filter((f) => {
+      const name = (f.otherUser.name || '').toLowerCase()
+      const email = f.otherUser.email.toLowerCase()
+      return name.includes(q) || email.includes(q)
+    })
+  }, [friends, friendFilter])
 
   async function handleLookup(e) {
     e.preventDefault()
@@ -198,12 +213,24 @@ export function FriendsPage() {
       <div className="card card-wide">
         <h2>{t('friends.listTitle')}</h2>
         {error && <p className="error" role="alert">{t('friends.loadError')}</p>}
+        {friends.length > 0 && (
+          <input
+            type="search"
+            className="search-input"
+            placeholder={t('friends.filterPlaceholder')}
+            aria-label={t('friends.filterPlaceholder')}
+            value={friendFilter}
+            onChange={(e) => setFriendFilter(e.target.value)}
+          />
+        )}
         {loading && friends.length === 0 ? (
           <p className="loading-note">{t('common.loading')}</p>
         ) : friends.length === 0 ? (
           <p className="empty-state">{t('friends.noFriends')}</p>
+        ) : filteredFriends.length === 0 ? (
+          <p className="empty-state">{t('chat.noResults')}</p>
         ) : (
-          friends.map((f) => (
+          filteredFriends.map((f) => (
             <div className="friend-row" key={f.friendshipId}>
               <span className="chat-avatar">{initials(f.otherUser.name || f.otherUser.email)}</span>
               <span className="chat-conversation-main">
