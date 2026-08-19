@@ -1330,6 +1330,21 @@ label {
   background: var(--bg-raised);
 }
 
+/* A linkified URL sits on whatever fill its bubble has — dark for "mine",
+   light for "theirs" — so the default link colour is illegible on one of
+   them. Inherit the bubble's own text colour and lean on the underline to
+   signal it's a link. Excludes the preview card, which is itself an anchor
+   but must not be underlined. */
+.chat-bubble a:not(.chat-link-preview) {
+  color: inherit;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+.chat-bubble a:not(.chat-link-preview):hover {
+  opacity: 0.8;
+}
+
 /* The unfurled card under a bubble. Tinted per bubble side for the same
    reason .chat-bubble-quote above is: a flat fill that reads correctly
    against the dark "mine" bubble is washed out against the light "theirs"
