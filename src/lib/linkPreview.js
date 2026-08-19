@@ -1,3 +1,6 @@
+const prisma = require("../../prisma/client");
+const { safeGet } = require("./safeFetch");
+
 const MAX_URL_LENGTH = 2048;
 const MAX_HTML_SCANNED = 128 * 1024;
 
@@ -70,4 +73,117 @@ function extractMetadata(html) {
   };
 }
 
-module.exports = { extractFirstUrl, extractMetadata };
+const HTML_MAX_BYTES = 512 * 1024;
+const HTML_TYPES = ["text/html", "application/xhtml+xml"];
+const IMAGE_MAX_BYTES = 200 * 1024;
+// SVG is deliberately absent: it is a script-carrying document, not an inert
+// image — the same call the 2026-08-18 audit made for attachment downloads.
+const IMAGE_TYPES = ["image/png", "image/jpeg", "image/webp", "image/gif"];
+
+async function fetchThumbnail(imageUrl, documentUrl) {
+  try {
+    const absolute = new URL(imageUrl, documentUrl).toString();
+    const image = await safeGet(absolute, {
+      maxBytes: IMAGE_MAX_BYTES,
+      allowedTypes: IMAGE_TYPES,
+      accept: IMAGE_TYPES.join(","),
+    });
+    return { imageData: image.body, imageMimeType: image.contentType };
+  } catch {
+    // A missing or oversized thumbnail downgrades the card to text-only. It
+    // is not a reason to throw away a perfectly good title and description.
+    return { imageData: null, imageMimeType: null };
+  }
+}
+
+/**
+ * Resolves one URL into a cached LinkPreview row, fetching it only if it has
+ * never been seen before.
+ *
+ * Never throws for a bad, dead, or hostile URL — a "failed" row is the
+ * outcome, and caching that failure is what keeps a link someone spams from
+ * costing one outbound request per send.
+ */
+async function resolveLinkPreview(url) {
+  if (typeof url !== "string" || url.length > MAX_URL_LENGTH) {
+    // Too long to even store, let alone index. Returned rather than thrown so
+    // callers have one shape to handle; the null id marks it unsaved.
+    return {
+      id: null,
+      url,
+      status: "failed",
+      title: null,
+      description: null,
+      siteName: null,
+      imageData: null,
+      imageMimeType: null,
+    };
+  }
+
+  const existing = await prisma.linkPreview.findUnique({ where: { url } });
+  if (existing) return existing;
+
+  let data = { url, status: "failed" };
+  try {
+    const doc = await safeGet(url, {
+      maxBytes: HTML_MAX_BYTES,
+      allowedTypes: HTML_TYPES,
+      accept: "text/html,application/xhtml+xml",
+    });
+    const meta = extractMetadata(doc.body.toString("utf8"));
+    if (meta.title || meta.description) {
+      // og:image is resolved against the *final* URL so a relative path still
+      // works after redirects.
+      const thumbnail = meta.imageUrl ? await fetchThumbnail(meta.imageUrl, doc.url) : {};
+      data = {
+        url,
+        status: "ok",
+        title: meta.title,
+        description: meta.description,
+        siteName: meta.siteName,
+        imageData: thumbnail.imageData ?? null,
+        imageMimeType: thumbnail.imageMimeType ?? null,
+      };
+    }
+  } catch (err) {
+    // Never log the URL's response body, nor the message it came from.
+    console.error("Link preview fetch failed:", err.message);
+  }
+
+  try {
+    return await prisma.linkPreview.create({ data });
+  } catch (err) {
+    // Two messages carrying the same brand-new link can race here and both
+    // pass the findUnique above. P2002 means the other one won; return its
+    // row rather than 500ing, matching how POST .../reactions already
+    // resolves the identical race on its own unique index.
+    if (err.code === "P2002") return prisma.linkPreview.findUnique({ where: { url } });
+    throw err;
+  }
+}
+
+// One message send triggers at most one outbound fetch, and sends already go
+// through apiLimiter — but that limit is generous enough that a burst would
+// still let one account point a lot of simultaneous requests at a target of
+// its choosing. Cap the concurrency per user so this app can't be pointed at
+// someone else's server as a load generator. In-process, and therefore
+// per-instance: the same single-instance caveat src/lib/chatBus.js carries.
+const MAX_CONCURRENT_FETCHES_PER_USER = 3;
+const inFlightByUser = new Map();
+
+async function withUserFetchSlot(userId, fn) {
+  const current = inFlightByUser.get(userId) || 0;
+  if (current >= MAX_CONCURRENT_FETCHES_PER_USER) return null;
+  inFlightByUser.set(userId, current + 1);
+  try {
+    return await fn();
+  } finally {
+    const remaining = (inFlightByUser.get(userId) || 1) - 1;
+    // Drop the key entirely at zero so this Map tracks only active work
+    // rather than growing one entry per user who ever sent a link.
+    if (remaining > 0) inFlightByUser.set(userId, remaining);
+    else inFlightByUser.delete(userId);
+  }
+}
+
+module.exports = { extractFirstUrl, extractMetadata, resolveLinkPreview, withUserFetchSlot };
