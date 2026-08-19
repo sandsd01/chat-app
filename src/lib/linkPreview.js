@@ -2,7 +2,10 @@ const prisma = require("../../prisma/client");
 const { safeGet } = require("./safeFetch");
 
 const MAX_URL_LENGTH = 2048;
-const MAX_HTML_SCANNED = 128 * 1024;
+// Matches HTML_MAX_BYTES below on purpose: downloading bytes we then refuse
+// to look at would be pure waste, and scanning past what we downloaded is
+// impossible. One number, no silent gap between the two.
+const MAX_HTML_SCANNED = 512 * 1024;
 
 const URL_PATTERN = /\bhttps?:\/\/[^\s<>"']+/i;
 
@@ -129,6 +132,10 @@ async function resolveLinkPreview(url) {
       maxBytes: HTML_MAX_BYTES,
       allowedTypes: HTML_TYPES,
       accept: "text/html,application/xhtml+xml",
+      // Stop at the cap and parse what arrived rather than rejecting the
+      // page: the tags we want are in the head, and plenty of ordinary sites
+      // ship more than half a megabyte of markup.
+      truncate: true,
     });
     const meta = extractMetadata(doc.body.toString("utf8"));
     if (meta.title || meta.description) {

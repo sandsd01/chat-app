@@ -192,7 +192,17 @@ function guardedLookup(hostname, options, callback) {
   });
 }
 
-function readCapped(res, maxBytes, deadline) {
+/**
+ * Reads a response body, bounded by `maxBytes` and `deadline`.
+ *
+ * `truncate` decides what hitting the cap *means*. For an HTML document it
+ * means "stop reading, this is enough" — the tags a preview needs live in the
+ * head, and plenty of ordinary sites (nodejs.org among them) ship more than
+ * half a megabyte of markup, so rejecting the whole page for being long would
+ * silently lose previews for exactly the popular sites people paste most. For
+ * an image it means "reject": half a PNG is not a smaller PNG.
+ */
+function readCapped(res, maxBytes, deadline, truncate = false) {
   return new Promise((resolve, reject) => {
     const chunks = [];
     let total = 0;
@@ -211,7 +221,12 @@ function readCapped(res, maxBytes, deadline) {
       if (total > maxBytes) {
         clearTimeout(timer);
         res.destroy();
-        reject(new Error("Response too large"));
+        if (truncate) {
+          chunks.push(chunk);
+          resolve(Buffer.concat(chunks).subarray(0, maxBytes));
+        } else {
+          reject(new Error("Response too large"));
+        }
         return;
       }
       chunks.push(chunk);
@@ -253,7 +268,7 @@ function requestOnce(url, accept, deadline) {
  * resolving relative links (an og:image path, say) resolves them against
  * where the document actually came from.
  */
-async function safeGet(rawUrl, { maxBytes, allowedTypes, accept }) {
+async function safeGet(rawUrl, { maxBytes, allowedTypes, accept, truncate = false }) {
   let url = assertFetchableUrl(rawUrl);
   const deadline = Date.now() + TOTAL_TIMEOUT_MS;
 
@@ -285,7 +300,7 @@ async function safeGet(rawUrl, { maxBytes, allowedTypes, accept }) {
       throw new Error(`Unsupported content type ${contentType || "(none)"}`);
     }
 
-    const body = await readCapped(res, maxBytes, deadline);
+    const body = await readCapped(res, maxBytes, deadline, truncate);
     return { url: url.toString(), contentType, body };
   }
 

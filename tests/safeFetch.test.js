@@ -153,4 +153,20 @@ describe("readCapped", () => {
     const stream = Readable.from([Buffer.alloc(500)]);
     await assert.rejects(readCapped(stream, 100, future()), /too large/i);
   });
+
+  // An HTML document past the cap is truncated and parsed, because the tags a
+  // preview needs are in the head and plenty of ordinary sites ship more than
+  // half a megabyte of markup. An image past the cap is still rejected —
+  // half a PNG is not a smaller PNG.
+  test("truncates to the cap instead of rejecting when asked to", async () => {
+    const stream = Readable.from([Buffer.from("a".repeat(60)), Buffer.from("b".repeat(60))]);
+    const body = await readCapped(stream, 100, future(), true);
+    assert.equal(body.length, 100);
+    assert.equal(body.toString().slice(0, 60), "a".repeat(60));
+  });
+
+  test("returns the whole body untruncated when it fits under the cap", async () => {
+    const body = await readCapped(Readable.from([Buffer.from("short")]), 100, future(), true);
+    assert.equal(body.toString(), "short");
+  });
 });
