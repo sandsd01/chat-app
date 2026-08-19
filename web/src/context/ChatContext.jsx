@@ -67,6 +67,7 @@ export function ChatProvider({ children }) {
   const deletedListenersRef = useRef(new Map()) // conversationId -> Set<(payload) => void>
   const reactionAddedListenersRef = useRef(new Map()) // conversationId -> Set<(payload) => void>
   const reactionRemovedListenersRef = useRef(new Map()) // conversationId -> Set<(payload) => void>
+  const linkPreviewListenersRef = useRef(new Map()) // conversationId -> Set<(payload) => void>
   const friendListenersRef = useRef(new Set())
   const esRef = useRef(null)
   const attemptRef = useRef(0)
@@ -126,6 +127,12 @@ export function ChatProvider({ children }) {
   )
   const subscribeToMessageDeleted = useCallback(
     (conversationId, callback) => subscribeViaMap(deletedListenersRef.current, conversationId, callback),
+    []
+  )
+  // Fired a moment after the message itself: the server resolves a preview
+  // out of band so a slow third-party site can't delay the send.
+  const subscribeToLinkPreview = useCallback(
+    (conversationId, callback) => subscribeViaMap(linkPreviewListenersRef.current, conversationId, callback),
     []
   )
   const subscribeToReactionAdded = useCallback(
@@ -249,6 +256,9 @@ export function ChatProvider({ children }) {
     addJsonListener(es, 'reaction-removed', (payload) => {
       dispatchViaMap(reactionRemovedListenersRef.current, payload.conversationId, payload)
     })
+    addJsonListener(es, 'link-preview', (payload) => {
+      dispatchViaMap(linkPreviewListenersRef.current, payload.conversationId, payload)
+    })
     addJsonListener(es, 'read', (payload) => {
       updateOtherLastReadAt(payload.conversationId, payload.lastReadAt)
     })
@@ -368,6 +378,7 @@ export function ChatProvider({ children }) {
       subscribeToMessageDeleted,
       subscribeToReactionAdded,
       subscribeToReactionRemoved,
+      subscribeToLinkPreview,
       subscribeToFriendEvents,
       markConversationRead,
       togglePin,
@@ -387,6 +398,7 @@ export function ChatProvider({ children }) {
       subscribeToMessageDeleted,
       subscribeToReactionAdded,
       subscribeToReactionRemoved,
+      subscribeToLinkPreview,
       subscribeToFriendEvents,
       markConversationRead,
       togglePin,

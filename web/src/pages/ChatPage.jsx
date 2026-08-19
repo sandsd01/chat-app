@@ -21,7 +21,9 @@ import {
 import { useDriveBackup } from '../hooks/useDriveBackup'
 import { useDocumentTitle } from '../hooks/useDocumentTitle'
 import { EmojiPicker } from '../components/EmojiPicker'
+import LinkPreviewCard from '../components/LinkPreviewCard'
 import { initials, localeFor } from '../lib/format'
+import { linkifyText } from '../lib/linkify'
 
 const MESSAGE_PAGE_SIZE = 50
 const SCROLL_BOTTOM_THRESHOLD = 80
@@ -68,6 +70,7 @@ export function ChatPage() {
     subscribeToMessageDeleted,
     subscribeToReactionAdded,
     subscribeToReactionRemoved,
+    subscribeToLinkPreview,
     markConversationRead,
     togglePin,
     toggleMute,
@@ -339,6 +342,18 @@ export function ChatPage() {
       )
     })
   }, [activeConversationId, subscribeToMessageDeleted])
+
+  // Arrives a beat after the message itself — the server unfurls the link out
+  // of band so a slow site can't hold up the send. Also clears the card when
+  // an edit removed the URL, since the payload's linkPreview is then null.
+  useEffect(() => {
+    if (!activeConversationId) return undefined
+    return subscribeToLinkPreview(activeConversationId, (payload) => {
+      setMessages((prev) =>
+        prev.map((m) => (m.id === payload.messageId ? { ...m, linkPreview: payload.linkPreview } : m))
+      )
+    })
+  }, [activeConversationId, subscribeToLinkPreview])
 
   // Both the reactor and the other participant get the same "reaction-added"/
   // "reaction-removed" event (see src/routes/chat.js), so the UI is purely
@@ -934,8 +949,15 @@ export function ChatPage() {
                                     </span>
                                   </a>
                                 )}
-                                {m.body}
+                                {linkifyText(m.body)}
                                 {m.editedAt && <span className="chat-bubble-edited-tag"> {t('chat.edited')}</span>}
+                                {m.linkPreview && (
+                                  <LinkPreviewCard
+                                    preview={m.linkPreview}
+                                    conversationId={activeConversationId}
+                                    messageId={m.id}
+                                  />
+                                )}
                                 <span className="chat-bubble-time">
                                   {formatTime(m.createdAt, language)}
                                   {mine && m.id === lastMineMessageId && (() => {
