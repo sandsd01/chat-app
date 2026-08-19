@@ -119,6 +119,14 @@ export function unmuteConversation(conversationId, token) {
   return apiFetch(`/chat/conversations/${conversationId}/mute`, { method: 'DELETE', token })
 }
 
+export function setDisappearing(conversationId, seconds, token) {
+  return apiFetch(`/chat/conversations/${conversationId}/disappearing`, {
+    method: 'POST',
+    body: { seconds },
+    token,
+  })
+}
+
 export function getStreamTicket(token) {
   return apiFetch('/chat/stream-ticket', { method: 'POST', token })
 }

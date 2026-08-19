@@ -1078,6 +1078,27 @@ label {
    (#fff) from the base button rule, which on this --bg-raised header is
    white-on-white — invisible to anything but a colour emoji, which ignores
    `color` entirely. Same fix applies to every transparent button below. */
+/* Sits with the icon buttons in the thread header, but stays a real <select>
+   — the four durations plus off need labels, and a native select gets
+   keyboard and screen-reader behaviour for free. */
+.chat-thread-disappearing {
+  flex-shrink: 0;
+  min-height: var(--tap);
+  max-width: 190px;
+  background: none;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  color: var(--text-muted);
+  cursor: pointer;
+  font-size: 13px;
+  padding: 0 6px;
+}
+
+.chat-thread-disappearing:hover {
+  color: var(--accent);
+  border-color: var(--border-strong);
+}
+
 .chat-thread-search-btn {
   flex-shrink: 0;
   min-width: var(--tap);

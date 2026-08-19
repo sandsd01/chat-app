@@ -25,6 +25,10 @@ import LinkPreviewCard from '../components/LinkPreviewCard'
 import { initials, localeFor } from '../lib/format'
 import { linkifyText } from '../lib/linkify'
 
+// Must stay in step with DISAPPEARING_SECONDS in src/routes/chat.js, which
+// validates against its own fixed set — the server rejects anything else.
+const DISAPPEARING_OPTIONS = [300, 3600, 86400, 604800]
+
 const MESSAGE_PAGE_SIZE = 50
 const SCROLL_BOTTOM_THRESHOLD = 80
 const SCROLL_TOP_LOAD_THRESHOLD = 60
@@ -71,9 +75,11 @@ export function ChatPage() {
     subscribeToReactionAdded,
     subscribeToReactionRemoved,
     subscribeToLinkPreview,
+    subscribeToMessageExpired,
     markConversationRead,
     togglePin,
     toggleMute,
+    changeDisappearing,
     startChat,
   } = useChat()
   const { friends } = useFriends()
@@ -354,6 +360,15 @@ export function ChatPage() {
       )
     })
   }, [activeConversationId, subscribeToLinkPreview])
+
+  // Removed outright rather than tombstoned the way message-deleted is: an
+  // expired message leaves nothing behind, so neither should its bubble.
+  useEffect(() => {
+    if (!activeConversationId) return undefined
+    return subscribeToMessageExpired(activeConversationId, (payload) => {
+      setMessages((prev) => prev.filter((m) => m.id !== payload.id))
+    })
+  }, [activeConversationId, subscribeToMessageExpired])
 
   // Both the reactor and the other participant get the same "reaction-added"/
   // "reaction-removed" event (see src/routes/chat.js), so the UI is purely
@@ -760,6 +775,23 @@ export function ChatPage() {
                 <span className="chat-avatar sm">{initials(threadHeaderName)}</span>
                 <span className="chat-thread-header-name">{threadHeaderName}</span>
                 <span className="chat-thread-header-spacer" />
+                {activeConversation && (
+                  <select
+                    className="chat-thread-disappearing"
+                    aria-label={t('chat.disappearingMessages')}
+                    value={activeConversation.disappearingSeconds ?? ''}
+                    onChange={(e) =>
+                      changeDisappearing(activeConversation.id, e.target.value ? Number(e.target.value) : null)
+                    }
+                  >
+                    <option value="">{t('chat.disappearingOff')}</option>
+                    {DISAPPEARING_OPTIONS.map((seconds) => (
+                      <option key={seconds} value={seconds}>
+                        {t(`chat.disappearing${seconds}`)}
+                      </option>
+                    ))}
+                  </select>
+                )}
                 {activeConversation && (
                   <button
                     type="button"
