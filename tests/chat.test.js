@@ -1571,3 +1571,77 @@ describe("link previews on messages", () => {
     assert.equal(res.body.data.find((m) => m.id === sent.body.id).linkPreview, null);
   });
 });
+
+describe("GET link preview image", () => {
+  beforeEach(resetDb);
+
+  async function messageWithStoredImage() {
+    const alice = await createUser({ email: "alice@example.com" });
+    const bob = await createUser({ email: "bob@example.com" });
+    const carol = await createUser({ email: "carol@example.com" });
+    await makeFriends(alice, bob);
+    const aliceToken = await login("alice@example.com", "password123");
+    const carolToken = await login("carol@example.com", "password123");
+
+    const convo = await request(app)
+      .post("/api/chat/conversations")
+      .set("Authorization", `Bearer ${aliceToken}`)
+      .send({ userId: bob.id });
+    const sent = await request(app)
+      .post(`/api/chat/conversations/${convo.body.id}/messages`)
+      .set("Authorization", `Bearer ${aliceToken}`)
+      .send({ body: "hello" });
+
+    const preview = await prisma.linkPreview.create({
+      data: {
+        url: "https://example.com/stored",
+        status: "ok",
+        title: "Stored",
+        imageData: Buffer.from([0x89, 0x50, 0x4e, 0x47]),
+        imageMimeType: "image/png",
+      },
+    });
+    await prisma.message.update({ where: { id: sent.body.id }, data: { linkPreviewId: preview.id } });
+
+    return { aliceToken, carolToken, conversationId: convo.body.id, messageId: sent.body.id };
+  }
+
+  test("serves the stored bytes to a participant", async () => {
+    const ctx = await messageWithStoredImage();
+    const res = await request(app)
+      .get(`/api/chat/conversations/${ctx.conversationId}/messages/${ctx.messageId}/link-preview-image`)
+      .set("Authorization", `Bearer ${ctx.aliceToken}`)
+      .expect(200);
+
+    assert.equal(res.headers["content-type"], "image/png");
+    assert.deepEqual([...res.body], [0x89, 0x50, 0x4e, 0x47]);
+  });
+
+  test("404s for a non-participant", async () => {
+    const ctx = await messageWithStoredImage();
+    await request(app)
+      .get(`/api/chat/conversations/${ctx.conversationId}/messages/${ctx.messageId}/link-preview-image`)
+      .set("Authorization", `Bearer ${ctx.carolToken}`)
+      .expect(404);
+  });
+
+  test("404s when the message has no preview", async () => {
+    const alice = await createUser({ email: "alice@example.com" });
+    const bob = await createUser({ email: "bob@example.com" });
+    await makeFriends(alice, bob);
+    const token = await login("alice@example.com", "password123");
+    const convo = await request(app)
+      .post("/api/chat/conversations")
+      .set("Authorization", `Bearer ${token}`)
+      .send({ userId: bob.id });
+    const sent = await request(app)
+      .post(`/api/chat/conversations/${convo.body.id}/messages`)
+      .set("Authorization", `Bearer ${token}`)
+      .send({ body: "no preview here" });
+
+    await request(app)
+      .get(`/api/chat/conversations/${convo.body.id}/messages/${sent.body.id}/link-preview-image`)
+      .set("Authorization", `Bearer ${token}`)
+      .expect(404);
+  });
+});

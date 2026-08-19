@@ -809,6 +809,28 @@ async function reactionsForMessages(messageIds, meId) {
   return result;
 }
 
+// Conversation-scoped rather than a flat /link-previews/:id/image, so it
+// inherits getConversationForParticipant and this app's 404-not-403
+// convention — and so nobody can walk a sequential id space to learn which
+// URLs have been shared on this instance.
+router.get("/conversations/:id/messages/:messageId/link-preview-image", async (req, res) => {
+  const conversationId = Number(req.params.id);
+  const conversation = await getConversationForParticipant(conversationId, req.user.id);
+  if (!conversation) return res.status(404).json({ error: "Conversation not found" });
+
+  const message = await getMessageInConversation(conversationId, Number(req.params.messageId));
+  if (!message?.linkPreviewId) return res.status(404).json({ error: "Not found" });
+
+  const preview = await prisma.linkPreview.findUnique({ where: { id: message.linkPreviewId } });
+  if (!preview?.imageData || !preview.imageMimeType) return res.status(404).json({ error: "Not found" });
+
+  res.setHeader("Content-Type", preview.imageMimeType);
+  // Immutable: a preview is never refetched, so the bytes behind this URL
+  // cannot change.
+  res.setHeader("Cache-Control", "private, max-age=86400, immutable");
+  res.send(Buffer.from(preview.imageData));
+});
+
 router.post("/conversations/:id/messages/:messageId/reactions", async (req, res) => {
   const conversationId = Number(req.params.id);
   const conversation = await getConversationForParticipant(conversationId, req.user.id);
