@@ -148,7 +148,14 @@ async function archiveUserConversations(userId) {
   for (const conversation of conversations) {
     const archiveFile = await ensureArchiveFile(user, conversation, accessToken, folderId);
     const newMessages = await prisma.message.findMany({
-      where: { conversationId: conversation.id, id: { gt: archiveFile.lastArchivedMessageId } },
+      // `expiresAt: null` excludes disappearing messages outright. They are
+      // never written to anyone's Drive, because the alternative — archiving
+      // them and later editing lines back out of a JSONL file in someone
+      // else's Drive, against a drive.file grant they can revoke at any
+      // moment — cannot guarantee the deletion ever lands. A promise that a
+      // message disappears must not depend on a third party's API being
+      // reachable. See pruneArchivedMessages below for the matching filter.
+      where: { conversationId: conversation.id, id: { gt: archiveFile.lastArchivedMessageId }, expiresAt: null },
       orderBy: { id: "asc" },
       include: { sender: { select: { id: true, name: true, email: true } } },
     });
@@ -240,8 +247,16 @@ async function pruneArchivedMessages() {
     const minWatermark = Math.min(...archives.map((a) => a.lastArchivedMessageId));
     if (minWatermark <= 0) continue;
 
+    // `expiresAt: null` is load-bearing, not defensive. This delete is sound
+    // only under the invariant "every id at or below the watermark has been
+    // archived by everyone" — and archiveUserConversations above deliberately
+    // skips disappearing messages, which breaks it for exactly those rows. An
+    // unexpired ephemeral message sitting below the watermark would otherwise
+    // be hard-deleted here, well before its timer, and from everywhere at
+    // once. Rows with expiresAt set belong solely to
+    // src/lib/messageExpiry.js#expireMessages.
     const result = await prisma.message.deleteMany({
-      where: { conversationId: conversation.id, id: { lte: minWatermark } },
+      where: { conversationId: conversation.id, id: { lte: minWatermark }, expiresAt: null },
     });
     deleted += result.count;
   }

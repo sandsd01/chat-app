@@ -2,6 +2,7 @@ require("dotenv/config");
 const cron = require("node-cron");
 const app = require("./app");
 const { driveConfigured, runArchiveSweep } = require("./lib/drive");
+const { expireMessages } = require("./lib/messageExpiry");
 
 const port = process.env.PORT || 3000;
 
@@ -61,3 +62,14 @@ if (driveConfigured) {
     runArchiveSweep().catch((err) => console.error("Drive archive sweep failed:", err));
   });
 }
+
+// Deletes messages whose disappearing-message timer has elapsed. Deliberately
+// NOT gated behind an optional-service flag the way the Drive sweep above is:
+// a conversation's timer is a promise the app made to both participants, so
+// this has to run in every deployment, not only ones that configured
+// something. Runs every minute by default — the resolution users can actually
+// perceive at the shortest offered duration (5 minutes).
+const expirySchedule = process.env.MESSAGE_EXPIRY_CRON || "* * * * *";
+cron.schedule(expirySchedule, () => {
+  expireMessages().catch((err) => console.error("Message expiry sweep failed:", err));
+});

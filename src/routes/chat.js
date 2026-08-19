@@ -148,6 +148,9 @@ function conversationSummary(conversation, meId) {
     otherLastReadAt: isUserA ? conversation.userBLastReadAt : conversation.userALastReadAt,
     pinned: Boolean(myPinnedAt(conversation, meId)),
     muted: Boolean(myMutedAt(conversation, meId)),
+    // Not per-side, unlike pinned/muted above: both participants share one
+    // timer and both see the same value.
+    disappearingSeconds: conversation.disappearingSeconds,
   };
 }
 
@@ -534,9 +537,24 @@ router.post("/conversations/:id/messages", async (req, res) => {
 
   const body = rawBody || null;
 
+  // Read once, here, and frozen onto the row as an absolute instant. Nothing
+  // later re-reads conversation.disappearingSeconds for this message, which
+  // is exactly why changing the timer can't retroact on messages already
+  // sent — the sender knew this message's lifetime when they sent it.
+  const expiresAt = conversation.disappearingSeconds
+    ? new Date(Date.now() + conversation.disappearingSeconds * 1000)
+    : null;
+
   const message = await prisma.$transaction(async (tx) => {
     const created = await tx.message.create({
-      data: { conversationId, senderId: req.user.id, body, replyToId: replyTarget?.id ?? null, ...attachmentFields },
+      data: {
+        conversationId,
+        senderId: req.user.id,
+        body,
+        replyToId: replyTarget?.id ?? null,
+        expiresAt,
+        ...attachmentFields,
+      },
     });
     await tx.conversation.update({
       where: { id: conversationId },
@@ -551,6 +569,7 @@ router.post("/conversations/:id/messages", async (req, res) => {
     senderId: message.senderId,
     body: message.body,
     createdAt: message.createdAt,
+    expiresAt: message.expiresAt,
     attachmentKey: message.attachmentKey,
     attachmentName: message.attachmentName,
     attachmentMimeType: message.attachmentMimeType,
@@ -988,6 +1007,36 @@ router.delete("/conversations/:id/mute", async (req, res) => {
     data: isUserA ? { userAMutedAt: null } : { userBMutedAt: null },
   });
   res.status(204).end();
+});
+
+// Validated against a fixed set rather than any positive integer, so the
+// durations the UI offers and the ones the server will accept can't drift
+// apart. Unlike mute (which is per-side and silent), this is state both
+// participants share and see, so the change is published to both.
+const DISAPPEARING_SECONDS = new Set([300, 3600, 86400, 604800]);
+
+router.post("/conversations/:id/disappearing", async (req, res) => {
+  const conversationId = Number(req.params.id);
+  const conversation = await getConversationForParticipant(conversationId, req.user.id);
+  if (!conversation) return res.status(404).json({ error: "Conversation not found" });
+
+  const raw = req.body?.seconds;
+  // null and 0 both mean "off" — 0 because a client computing a duration is
+  // likelier to land on it than on null.
+  const seconds = raw === null || raw === undefined || raw === 0 ? null : raw;
+  if (seconds !== null && !DISAPPEARING_SECONDS.has(seconds)) {
+    return res.status(400).json({
+      error: `seconds must be null or one of ${[...DISAPPEARING_SECONDS].join(", ")}`,
+    });
+  }
+
+  await prisma.conversation.update({ where: { id: conversationId }, data: { disappearingSeconds: seconds } });
+
+  const payload = { conversationId, seconds };
+  chatBus.publish(conversation.userAId, "disappearing-changed", payload);
+  chatBus.publish(conversation.userBId, "disappearing-changed", payload);
+
+  res.json(payload);
 });
 
 router.post("/stream-ticket", (req, res) => {

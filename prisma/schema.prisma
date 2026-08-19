@@ -147,6 +147,12 @@ model Conversation {
   /// side needs to be told about.
   userAMutedAt    DateTime?
   userBMutedAt    DateTime?
+  /// Disappearing-message timer in seconds, null for off. Either participant
+  /// may change it (unlike mute, which is per-side), and it is read exactly
+  /// once per message — at send time, to stamp Message.expiresAt. Changing it
+  /// therefore never affects messages already sent, which is what lets a
+  /// sender know a message's lifetime at the moment they send it.
+  disappearingSeconds Int?
   createdAt       DateTime  @default(now())
 
   userA             User               @relation("ConversationUserA", fields: [userAId], references: [id])
@@ -199,6 +205,18 @@ model Message {
   /// /conversations/:id/messages). Points at a row keyed on the URL itself,
   /// so the same link shared by twenty people is fetched once.
   linkPreviewId      Int?
+  /// Absolute instant this message is deleted outright by the expiry sweep
+  /// (src/lib/messageExpiry.js), frozen at creation from the conversation's
+  /// disappearingSeconds. Absolute rather than a duration on purpose: there
+  /// is then no later read of the conversation setting that could retroact
+  /// on a message already sent.
+  ///
+  /// A row with this set is owned exclusively by the expiry sweep —
+  /// src/lib/drive.js never archives it and pruneArchivedMessages never
+  /// deletes it. Letting prune touch it would delete it early, since prune
+  /// trusts "every id below the watermark is archived" and an ephemeral
+  /// message is deliberately never archived.
+  expiresAt          DateTime?
 
   conversation Conversation      @relation(fields: [conversationId], references: [id])
   sender       User              @relation("MessageSender", fields: [senderId], references: [id])
@@ -208,6 +226,10 @@ model Message {
   linkPreview  LinkPreview?      @relation(fields: [linkPreviewId], references: [id])
 
   @@index([conversationId, createdAt])
+  /// The expiry sweep's only query is `expiresAt <= now()` across every
+  /// conversation, so it gets its own index rather than scanning the table
+  /// once a minute.
+  @@index([expiresAt])
   @@map("messages")
 }
 

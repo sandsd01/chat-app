@@ -1645,3 +1645,159 @@ describe("GET link preview image", () => {
       .expect(404);
   });
 });
+
+describe("disappearing messages", () => {
+  beforeEach(resetDb);
+
+  async function setup() {
+    const alice = await createUser({ email: "alice@example.com" });
+    const bob = await createUser({ email: "bob@example.com" });
+    const carol = await createUser({ email: "carol@example.com" });
+    await makeFriends(alice, bob);
+    const aliceToken = await login("alice@example.com", "password123");
+    const bobToken = await login("bob@example.com", "password123");
+    const carolToken = await login("carol@example.com", "password123");
+    const convo = await request(app)
+      .post("/api/chat/conversations")
+      .set("Authorization", `Bearer ${aliceToken}`)
+      .send({ userId: bob.id });
+    return { alice, bob, aliceToken, bobToken, carolToken, conversationId: convo.body.id };
+  }
+
+  test("accepts each allowed duration and turning it off", async () => {
+    const ctx = await setup();
+    for (const seconds of [300, 3600, 86400, 604800]) {
+      await request(app)
+        .post(`/api/chat/conversations/${ctx.conversationId}/disappearing`)
+        .set("Authorization", `Bearer ${ctx.aliceToken}`)
+        .send({ seconds })
+        .expect(200);
+      const row = await prisma.conversation.findUnique({ where: { id: ctx.conversationId } });
+      assert.equal(row.disappearingSeconds, seconds);
+    }
+
+    await request(app)
+      .post(`/api/chat/conversations/${ctx.conversationId}/disappearing`)
+      .set("Authorization", `Bearer ${ctx.aliceToken}`)
+      .send({ seconds: null })
+      .expect(200);
+    const off = await prisma.conversation.findUnique({ where: { id: ctx.conversationId } });
+    assert.equal(off.disappearingSeconds, null);
+  });
+
+  test("rejects a duration outside the allowed set", async () => {
+    const ctx = await setup();
+    for (const seconds of [1, 999, -300, "an hour"]) {
+      await request(app)
+        .post(`/api/chat/conversations/${ctx.conversationId}/disappearing`)
+        .set("Authorization", `Bearer ${ctx.aliceToken}`)
+        .send({ seconds })
+        .expect(400);
+    }
+  });
+
+  test("either participant can set it, and a non-participant gets 404", async () => {
+    const ctx = await setup();
+    await request(app)
+      .post(`/api/chat/conversations/${ctx.conversationId}/disappearing`)
+      .set("Authorization", `Bearer ${ctx.bobToken}`)
+      .send({ seconds: 3600 })
+      .expect(200);
+
+    await request(app)
+      .post(`/api/chat/conversations/${ctx.conversationId}/disappearing`)
+      .set("Authorization", `Bearer ${ctx.carolToken}`)
+      .send({ seconds: 3600 })
+      .expect(404);
+  });
+
+  test("publishes the change to both participants", async () => {
+    const ctx = await setup();
+    const aliceEvent = waitForEvent(ctx.alice.id, "disappearing-changed");
+    const bobEvent = waitForEvent(ctx.bob.id, "disappearing-changed");
+
+    await request(app)
+      .post(`/api/chat/conversations/${ctx.conversationId}/disappearing`)
+      .set("Authorization", `Bearer ${ctx.aliceToken}`)
+      .send({ seconds: 3600 })
+      .expect(200);
+
+    for (const payload of await Promise.all([aliceEvent, bobEvent])) {
+      assert.equal(payload.conversationId, ctx.conversationId);
+      assert.equal(payload.seconds, 3600);
+    }
+  });
+
+  test("stamps expiresAt on a message sent while the timer is on", async () => {
+    const ctx = await setup();
+    await request(app)
+      .post(`/api/chat/conversations/${ctx.conversationId}/disappearing`)
+      .set("Authorization", `Bearer ${ctx.aliceToken}`)
+      .send({ seconds: 3600 });
+
+    const sent = await request(app)
+      .post(`/api/chat/conversations/${ctx.conversationId}/messages`)
+      .set("Authorization", `Bearer ${ctx.aliceToken}`)
+      .send({ body: "ephemeral" })
+      .expect(201);
+
+    const row = await prisma.message.findUnique({ where: { id: sent.body.id } });
+    assert.ok(row.expiresAt, "expected expiresAt to be set");
+    const deltaMs = row.expiresAt.getTime() - row.createdAt.getTime();
+    assert.ok(Math.abs(deltaMs - 3600_000) < 2000, `expected ~1h, got ${deltaMs}ms`);
+    assert.ok(sent.body.expiresAt, "expected expiresAt on the response payload too");
+  });
+
+  test("leaves expiresAt null while the timer is off", async () => {
+    const ctx = await setup();
+    const sent = await request(app)
+      .post(`/api/chat/conversations/${ctx.conversationId}/messages`)
+      .set("Authorization", `Bearer ${ctx.aliceToken}`)
+      .send({ body: "permanent" })
+      .expect(201);
+
+    const row = await prisma.message.findUnique({ where: { id: sent.body.id } });
+    assert.equal(row.expiresAt, null);
+  });
+
+  // The property that makes the feature comprehensible: the sender knew the
+  // message's lifetime when they sent it, and nobody can reach back later.
+  test("changing the timer does not retroact on messages already sent", async () => {
+    const ctx = await setup();
+    await request(app)
+      .post(`/api/chat/conversations/${ctx.conversationId}/disappearing`)
+      .set("Authorization", `Bearer ${ctx.aliceToken}`)
+      .send({ seconds: 3600 });
+    const sent = await request(app)
+      .post(`/api/chat/conversations/${ctx.conversationId}/messages`)
+      .set("Authorization", `Bearer ${ctx.aliceToken}`)
+      .send({ body: "sent under the 1h timer" });
+    const before = await prisma.message.findUnique({ where: { id: sent.body.id } });
+
+    // Both a longer timer and turning it off entirely must leave it alone.
+    for (const seconds of [604800, null]) {
+      await request(app)
+        .post(`/api/chat/conversations/${ctx.conversationId}/disappearing`)
+        .set("Authorization", `Bearer ${ctx.bobToken}`)
+        .send({ seconds })
+        .expect(200);
+      const after = await prisma.message.findUnique({ where: { id: sent.body.id } });
+      assert.equal(after.expiresAt.getTime(), before.expiresAt.getTime());
+    }
+  });
+
+  test("GET conversations exposes the current setting", async () => {
+    const ctx = await setup();
+    await request(app)
+      .post(`/api/chat/conversations/${ctx.conversationId}/disappearing`)
+      .set("Authorization", `Bearer ${ctx.aliceToken}`)
+      .send({ seconds: 86400 });
+
+    const res = await request(app)
+      .get("/api/chat/conversations")
+      .set("Authorization", `Bearer ${ctx.bobToken}`)
+      .expect(200);
+
+    assert.equal(res.body.find((c) => c.id === ctx.conversationId).disappearingSeconds, 86400);
+  });
+});
