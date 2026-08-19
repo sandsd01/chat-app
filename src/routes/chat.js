@@ -7,6 +7,7 @@ const { sendPushToUser } = require("../lib/push");
 const { readArchivedMessages } = require("../lib/drive");
 const { attachmentsConfigured, createUploadUrl, verifyUploadedObject, createDownloadUrl } = require("../lib/attachments");
 const { createTicketStore } = require("../lib/ticketStore");
+const { extractFirstUrl, resolveLinkPreview, withUserFetchSlot } = require("../lib/linkPreview");
 
 const router = express.Router();
 
@@ -276,6 +277,7 @@ router.get("/conversations/:id/messages", async (req, res) => {
     },
     orderBy: [{ createdAt: "desc" }, { id: "desc" }],
     take: limit + 1,
+    include: { linkPreview: true },
   });
 
   const hasMore = rows.length > limit;
@@ -288,12 +290,16 @@ router.get("/conversations/:id/messages", async (req, res) => {
   // never a permanent link, and this route already only reaches rows for a
   // conversation the caller is confirmed a participant of (see
   // getConversationForParticipant above).
+  // The joined `linkPreview` relation is destructured out rather than spread:
+  // it carries the raw image bytes, which belong on the image route below and
+  // nowhere near a JSON message list.
   const data = await Promise.all(
-    page.map(async (m) => ({
+    page.map(async ({ linkPreview, ...m }) => ({
       ...m,
       attachmentUrl: m.attachmentKey ? await createDownloadUrl(m.attachmentKey, m.attachmentType) : null,
       reactions: reactionsByMessage.get(m.id) || [],
       replyTo: m.replyToId ? replyPreviews.get(m.replyToId) || null : null,
+      linkPreview: linkPreviewPayload(linkPreview),
     }))
   );
 
@@ -610,8 +616,66 @@ router.post("/conversations/:id/messages", async (req, res) => {
       .catch((err) => console.error("Push notification failed:", err));
   }
 
+  schedulePreviewResolution(message, conversation);
+
   res.status(201).json(ssePayload);
 });
+
+// --- Link previews -------------------------------------------------------
+
+/**
+ * The wire shape of a preview. `imageData` deliberately never crosses the
+ * API — the bytes are served by the conversation-scoped image route below, so
+ * a message list stays small and the browser keeps talking only to us.
+ * A "failed" row renders as no card at all.
+ */
+function linkPreviewPayload(preview) {
+  if (!preview || preview.status !== "ok") return null;
+  return {
+    id: preview.id,
+    url: preview.url,
+    title: preview.title,
+    description: preview.description,
+    siteName: preview.siteName,
+    hasImage: Boolean(preview.imageMimeType),
+  };
+}
+
+/**
+ * Resolves a message's link preview out of band and announces it.
+ *
+ * Fire-and-forget, exactly like the push call in POST .../messages and for
+ * the same reason: an unresponsive third-party server must never hold up the
+ * response the sender is waiting on. A failure here is logged and dropped —
+ * the message itself is already sent and is not in question.
+ */
+function schedulePreviewResolution(message, conversation) {
+  const url = extractFirstUrl(message.body);
+  if (!url) return;
+
+  withUserFetchSlot(message.senderId, () => resolveLinkPreview(url))
+    .then(async (preview) => {
+      // null means the sender is already at their concurrent-fetch cap; the
+      // message stands, it just doesn't get a card.
+      if (!preview?.id) return;
+
+      const current = await prisma.message.findUnique({ where: { id: message.id } });
+      // The message may have been edited or deleted while we were off
+      // fetching; attaching a preview now would resurrect a card for content
+      // that no longer exists.
+      if (!current || current.deletedAt || current.body !== message.body) return;
+
+      await prisma.message.update({ where: { id: message.id }, data: { linkPreviewId: preview.id } });
+      const payload = {
+        conversationId: conversation.id,
+        messageId: message.id,
+        linkPreview: linkPreviewPayload(preview),
+      };
+      chatBus.publish(conversation.userAId, "link-preview", payload);
+      chatBus.publish(conversation.userBId, "link-preview", payload);
+    })
+    .catch((err) => console.error("Link preview resolution failed:", err.message));
+}
 
 /** "Does this message belong to this conversation" check shared by every route below keyed on :messageId. */
 async function getMessageInConversation(conversationId, messageId) {
@@ -646,6 +710,15 @@ router.patch("/conversations/:id/messages/:messageId", async (req, res) => {
     data: { body, editedAt: new Date() },
   });
 
+  // Editing a URL out of a message must not leave its card behind, and
+  // editing a different one in should unfurl the new one.
+  const previousUrl = extractFirstUrl(lookup.message.body);
+  const nextUrl = extractFirstUrl(body);
+  if (previousUrl !== nextUrl) {
+    await prisma.message.update({ where: { id: updated.id }, data: { linkPreviewId: null } });
+    schedulePreviewResolution(updated, conversation);
+  }
+
   const payload = { id: updated.id, conversationId, body: updated.body, editedAt: updated.editedAt };
   chatBus.publish(conversation.userAId, "message-edited", payload);
   chatBus.publish(conversation.userBId, "message-edited", payload);
@@ -675,6 +748,7 @@ router.delete("/conversations/:id/messages/:messageId", async (req, res) => {
       attachmentMimeType: null,
       attachmentSize: null,
       attachmentType: null,
+      linkPreviewId: null,
     },
   });
 

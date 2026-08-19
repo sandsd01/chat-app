@@ -1456,3 +1456,118 @@ describe("Chat API", () => {
     });
   });
 });
+
+describe("link previews on messages", () => {
+  beforeEach(resetDb);
+
+  // The URLs below are blocked by the SSRF fence, so resolution lands on a
+  // "failed" row — which is exactly what these tests assert about the
+  // *plumbing*: that a preview is resolved, attached, and published at all.
+  // Successful unfurling is covered by tests/linkPreview.test.js.
+  async function conversationWith(bodyText) {
+    const alice = await createUser({ email: "alice@example.com" });
+    const bob = await createUser({ email: "bob@example.com" });
+    await makeFriends(alice, bob);
+    const token = await login("alice@example.com", "password123");
+
+    const convo = await request(app)
+      .post("/api/chat/conversations")
+      .set("Authorization", `Bearer ${token}`)
+      .send({ userId: bob.id });
+
+    return { alice, bob, token, conversationId: convo.body.id, bodyText };
+  }
+
+  test("announces a resolved preview over SSE", async () => {
+    const ctx = await conversationWith("check http://169.254.169.254/ out");
+    const eventPromise = waitForEvent(ctx.bob.id, "link-preview", 5000);
+
+    await request(app)
+      .post(`/api/chat/conversations/${ctx.conversationId}/messages`)
+      .set("Authorization", `Bearer ${ctx.token}`)
+      .send({ body: ctx.bodyText })
+      .expect(201);
+
+    const event = await eventPromise;
+    assert.equal(event.conversationId, ctx.conversationId);
+    assert.ok(event.messageId);
+  });
+
+  test("does not resolve anything for a message with no URL", async () => {
+    const ctx = await conversationWith("no links here at all");
+    await request(app)
+      .post(`/api/chat/conversations/${ctx.conversationId}/messages`)
+      .set("Authorization", `Bearer ${ctx.token}`)
+      .send({ body: ctx.bodyText })
+      .expect(201);
+
+    await new Promise((resolve) => setTimeout(resolve, 300));
+    assert.equal(await prisma.linkPreview.count(), 0);
+  });
+
+  test("clears the preview when the message is deleted", async () => {
+    const ctx = await conversationWith("http://169.254.169.254/");
+    const sent = await request(app)
+      .post(`/api/chat/conversations/${ctx.conversationId}/messages`)
+      .set("Authorization", `Bearer ${ctx.token}`)
+      .send({ body: ctx.bodyText });
+
+    await request(app)
+      .delete(`/api/chat/conversations/${ctx.conversationId}/messages/${sent.body.id}`)
+      .set("Authorization", `Bearer ${ctx.token}`)
+      .expect(200);
+
+    const row = await prisma.message.findUnique({ where: { id: sent.body.id } });
+    assert.equal(row.linkPreviewId, null);
+  });
+
+  test("GET messages exposes the preview but never the stored image bytes", async () => {
+    const ctx = await conversationWith("hello");
+    const sent = await request(app)
+      .post(`/api/chat/conversations/${ctx.conversationId}/messages`)
+      .set("Authorization", `Bearer ${ctx.token}`)
+      .send({ body: ctx.bodyText });
+
+    const preview = await prisma.linkPreview.create({
+      data: {
+        url: "https://example.com/stored",
+        status: "ok",
+        title: "Stored",
+        siteName: "Example",
+        imageData: Buffer.from([0x89, 0x50, 0x4e, 0x47]),
+        imageMimeType: "image/png",
+      },
+    });
+    await prisma.message.update({ where: { id: sent.body.id }, data: { linkPreviewId: preview.id } });
+
+    const res = await request(app)
+      .get(`/api/chat/conversations/${ctx.conversationId}/messages`)
+      .set("Authorization", `Bearer ${ctx.token}`)
+      .expect(200);
+
+    const message = res.body.data.find((m) => m.id === sent.body.id);
+    assert.equal(message.linkPreview.title, "Stored");
+    assert.equal(message.linkPreview.hasImage, true);
+    assert.equal(message.linkPreview.imageData, undefined);
+  });
+
+  test("a failed preview is not exposed as a card", async () => {
+    const ctx = await conversationWith("hello");
+    const sent = await request(app)
+      .post(`/api/chat/conversations/${ctx.conversationId}/messages`)
+      .set("Authorization", `Bearer ${ctx.token}`)
+      .send({ body: ctx.bodyText });
+
+    const preview = await prisma.linkPreview.create({
+      data: { url: "https://example.com/dead", status: "failed" },
+    });
+    await prisma.message.update({ where: { id: sent.body.id }, data: { linkPreviewId: preview.id } });
+
+    const res = await request(app)
+      .get(`/api/chat/conversations/${ctx.conversationId}/messages`)
+      .set("Authorization", `Bearer ${ctx.token}`)
+      .expect(200);
+
+    assert.equal(res.body.data.find((m) => m.id === sent.body.id).linkPreview, null);
+  });
+});
