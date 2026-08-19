@@ -194,12 +194,18 @@ model Message {
   /// just renders the same "This message was deleted." text the bubble
   /// itself would.
   replyToId          Int?
+  /// The unfurled preview for the first URL in `body`, resolved
+  /// asynchronously after the message is created (see POST
+  /// /conversations/:id/messages). Points at a row keyed on the URL itself,
+  /// so the same link shared by twenty people is fetched once.
+  linkPreviewId      Int?
 
   conversation Conversation      @relation(fields: [conversationId], references: [id])
   sender       User              @relation("MessageSender", fields: [senderId], references: [id])
   reactions    MessageReaction[]
   replyTo      Message?          @relation("MessageReplyTo", fields: [replyToId], references: [id])
   replies      Message[]         @relation("MessageReplyTo")
+  linkPreview  LinkPreview?      @relation(fields: [linkPreviewId], references: [id])
 
   @@index([conversationId, createdAt])
   @@map("messages")
@@ -225,6 +231,35 @@ model MessageReaction {
 
   @@unique([messageId, userId, emoji])
   @@map("message_reactions")
+}
+
+/// A cached unfurl of one URL: title/description/site name plus the
+/// thumbnail's actual bytes. The bytes live here rather than being hotlinked
+/// because src/app.js pins img-src to 'self', and widening it would leak
+/// every *reading* user's IP to whatever host the *sending* user chose.
+///
+/// Never refetched. A preview is a snapshot of what the link looked like when
+/// it was shared, which is the semantics a chat log wants, and it keeps cache
+/// invalidation out of the design entirely. Failures are cached too
+/// (status = "failed") so a dead link costs one fetch, not one per share.
+model LinkPreview {
+  id            Int      @id @default(autoincrement())
+  /// VarChar, not Text: a btree unique index can't cover values past roughly
+  /// 2704 bytes, so an unbounded column would turn an over-long URL into a
+  /// runtime insert failure instead of a validation error.
+  url           String   @unique @db.VarChar(2048)
+  /// "ok" | "failed"
+  status        String
+  title         String?
+  description   String?  @db.Text
+  siteName      String?
+  imageData     Bytes?
+  imageMimeType String?
+  fetchedAt     DateTime @default(now())
+
+  messages Message[]
+
+  @@map("link_previews")
 }
 
 /// One participant's own archive of one conversation, in their own Drive —
