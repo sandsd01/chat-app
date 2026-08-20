@@ -34,10 +34,10 @@ export function searchMessages(conversationId, { q, ...opts } = {}, token) {
   return apiFetch(`/chat/conversations/${conversationId}/messages/search?${qs}`, { token })
 }
 
-export function sendMessage(conversationId, { body, attachmentKey, attachmentName } = {}, token) {
+export function sendMessage(conversationId, { body, attachmentKey, attachmentName, replyToId } = {}, token) {
   return apiFetch(`/chat/conversations/${conversationId}/messages`, {
     method: 'POST',
-    body: { body, attachmentKey, attachmentName },
+    body: { body, attachmentKey, attachmentName, replyToId },
     token,
   })
 }
@@ -90,6 +90,14 @@ export function markRead(conversationId, token) {
   return apiFetch(`/chat/conversations/${conversationId}/read`, { method: 'POST', token })
 }
 
+export function pinConversation(conversationId, token) {
+  return apiFetch(`/chat/conversations/${conversationId}/pin`, { method: 'POST', token })
+}
+
+export function unpinConversation(conversationId, token) {
+  return apiFetch(`/chat/conversations/${conversationId}/pin`, { method: 'DELETE', token })
+}
+
 export function muteConversation(conversationId, token) {
   return apiFetch(`/chat/conversations/${conversationId}/mute`, { method: 'POST', token })
 }
@@ -98,10 +106,40 @@ export function unmuteConversation(conversationId, token) {
   return apiFetch(`/chat/conversations/${conversationId}/unmute`, { method: 'POST', token })
 }
 
+export function setDisappearing(conversationId, seconds, token) {
+  return apiFetch(`/chat/conversations/${conversationId}/disappearing`, {
+    method: 'POST',
+    body: { seconds },
+    token,
+  })
+}
+
 export function sendTyping(conversationId, token) {
   return apiFetch(`/chat/conversations/${conversationId}/typing`, { method: 'POST', token })
 }
 
 export function getStreamTicket(token) {
   return apiFetch('/chat/stream-ticket', { method: 'POST', token })
+}
+
+export function exportConversation(conversationId, token) {
+  return apiFetch(`/chat/conversations/${conversationId}/export`, { token })
+}
+
+/**
+ * Fetches a link preview thumbnail as a Blob.
+ *
+ * Not apiFetch, which always parses JSON — and not a plain <img src>, which
+ * is the whole problem: an <img> can't send an Authorization header, and this
+ * app is bearer-JWT only with no cookie session to fall back on (the same
+ * constraint that forced EventSource onto the stream-ticket pattern). Rather
+ * than invent a second ticket system for images, fetch the bytes with the
+ * token and hand the caller a blob: URL, which the app's CSP already allows.
+ */
+export async function fetchLinkPreviewImage(conversationId, messageId, token) {
+  const res = await fetch(`/api/chat/conversations/${conversationId}/messages/${messageId}/link-preview-image`, {
+    headers: { Authorization: `Bearer ${token}` },
+  })
+  if (!res.ok) throw new Error(`Preview image failed: ${res.status}`)
+  return res.blob()
 }

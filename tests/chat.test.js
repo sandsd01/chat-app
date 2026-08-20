@@ -381,6 +381,44 @@ describe("Chat API", () => {
       // Pages come back newest-first; reverse to compare against insertion order.
       assert.deepEqual(seenBodies.slice().reverse(), bodies);
     });
+
+    test("replyTo reflects the original's current state on every fetch, not what it was when the reply was sent", async () => {
+      const conv = await createConversation(adminToken, staffUser.id);
+      const original = await request(app)
+        .post(`/api/chat/conversations/${conv.body.id}/messages`)
+        .set("Authorization", `Bearer ${adminToken}`)
+        .send({ body: "before edit" });
+      const reply = await request(app)
+        .post(`/api/chat/conversations/${conv.body.id}/messages`)
+        .set("Authorization", `Bearer ${staffToken}`)
+        .send({ body: "a reply", replyToId: original.body.id });
+
+      const beforeEdit = await request(app)
+        .get(`/api/chat/conversations/${conv.body.id}/messages`)
+        .set("Authorization", `Bearer ${adminToken}`);
+      const replyRowBefore = beforeEdit.body.data.find((m) => m.id === reply.body.id);
+      assert.deepEqual(replyRowBefore.replyTo, {
+        id: original.body.id,
+        senderId: adminUser.id,
+        body: "before edit",
+        deletedAt: null,
+      });
+
+      await request(app)
+        .patch(`/api/chat/conversations/${conv.body.id}/messages/${original.body.id}`)
+        .set("Authorization", `Bearer ${adminToken}`)
+        .send({ body: "after edit" });
+
+      const afterEdit = await request(app)
+        .get(`/api/chat/conversations/${conv.body.id}/messages`)
+        .set("Authorization", `Bearer ${adminToken}`);
+      const replyRowAfter = afterEdit.body.data.find((m) => m.id === reply.body.id);
+      assert.equal(replyRowAfter.replyTo.body, "after edit");
+
+      // A message with no reply gets an explicit null, not an absent key.
+      const originalRow = afterEdit.body.data.find((m) => m.id === original.body.id);
+      assert.equal(originalRow.replyTo, null);
+    });
   });
 
   describe("GET /chat/conversations/:id/messages/search", () => {
@@ -466,6 +504,59 @@ describe("Chat API", () => {
     });
   });
 
+  describe("GET /chat/conversations/:id/export", () => {
+    async function createConversation(token, userId) {
+      return request(app)
+        .post("/api/chat/conversations")
+        .set("Authorization", `Bearer ${token}`)
+        .send({ userId });
+    }
+
+    test("requires authentication", async () => {
+      const res = await request(app).get("/api/chat/conversations/1/export");
+      assert.equal(res.status, 401);
+    });
+
+    test("404s for a non-participant", async () => {
+      const conv = await createConversation(adminToken, staffUser.id);
+      const res = await request(app)
+        .get(`/api/chat/conversations/${conv.body.id}/export`)
+        .set("Authorization", `Bearer ${otherToken}`);
+      assert.equal(res.status, 404);
+    });
+
+    test("exports messages oldest-first, as a downloadable attachment", async () => {
+      const conv = await createConversation(adminToken, staffUser.id);
+      await request(app)
+        .post(`/api/chat/conversations/${conv.body.id}/messages`)
+        .set("Authorization", `Bearer ${adminToken}`)
+        .send({ body: "first" });
+      const second = await request(app)
+        .post(`/api/chat/conversations/${conv.body.id}/messages`)
+        .set("Authorization", `Bearer ${staffToken}`)
+        .send({ body: "second" });
+      await request(app)
+        .delete(`/api/chat/conversations/${conv.body.id}/messages/${second.body.id}`)
+        .set("Authorization", `Bearer ${staffToken}`);
+      await request(app)
+        .post(`/api/chat/conversations/${conv.body.id}/messages`)
+        .set("Authorization", `Bearer ${adminToken}`)
+        .send({ body: "third" });
+
+      const res = await request(app)
+        .get(`/api/chat/conversations/${conv.body.id}/export`)
+        .set("Authorization", `Bearer ${adminToken}`);
+      assert.equal(res.status, 200);
+      assert.match(res.headers["content-disposition"], /attachment/);
+      assert.equal(res.body.conversationId, conv.body.id);
+      assert.deepEqual(
+        res.body.messages.map((m) => m.body),
+        ["first", null, "third"]
+      );
+      assert.ok(res.body.messages[1].deletedAt, "the deleted message keeps its deletedAt, not silently dropped");
+    });
+  });
+
   describe("POST /chat/conversations/:id/messages", () => {
     async function createConversation(token, userId) {
       return request(app)
@@ -546,6 +637,91 @@ describe("Chat API", () => {
 
       const after = await prisma.conversation.findUnique({ where: { id: conv.body.id } });
       assert.ok(after.lastMessageAt, "lastMessageAt must be set after a message is sent");
+    });
+
+    test("delivered is true when the recipient has a live SSE connection open at send time, false otherwise", async () => {
+      const conv = await createConversation(adminToken, staffUser.id);
+
+      const notDelivered = await request(app)
+        .post(`/api/chat/conversations/${conv.body.id}/messages`)
+        .set("Authorization", `Bearer ${adminToken}`)
+        .send({ body: "staff isn't connected" });
+      assert.equal(notDelivered.body.delivered, false);
+
+      const unsubscribe = chatBus.subscribe(staffUser.id, () => {});
+      try {
+        const delivered = await request(app)
+          .post(`/api/chat/conversations/${conv.body.id}/messages`)
+          .set("Authorization", `Bearer ${adminToken}`)
+          .send({ body: "staff is connected now" });
+        assert.equal(delivered.body.delivered, true);
+      } finally {
+        unsubscribe();
+      }
+    });
+
+    test("replyToId attaches a quoted snippet of the original, visible to both participants", async () => {
+      const conv = await createConversation(adminToken, staffUser.id);
+      const original = await request(app)
+        .post(`/api/chat/conversations/${conv.body.id}/messages`)
+        .set("Authorization", `Bearer ${adminToken}`)
+        .send({ body: "original message" });
+
+      const reply = await request(app)
+        .post(`/api/chat/conversations/${conv.body.id}/messages`)
+        .set("Authorization", `Bearer ${staffToken}`)
+        .send({ body: "a reply", replyToId: original.body.id });
+      assert.equal(reply.status, 201);
+      assert.deepEqual(reply.body.replyTo, {
+        id: original.body.id,
+        senderId: adminUser.id,
+        body: "original message",
+        deletedAt: null,
+      });
+
+      const dbMessage = await prisma.message.findUnique({ where: { id: reply.body.id } });
+      assert.equal(dbMessage.replyToId, original.body.id);
+    });
+
+    test("400 when replyToId references a message in a different conversation", async () => {
+      const convStaff = await createConversation(adminToken, staffUser.id);
+      const convOther = await createConversation(adminToken, otherUser.id);
+      const inOtherConv = await request(app)
+        .post(`/api/chat/conversations/${convOther.body.id}/messages`)
+        .set("Authorization", `Bearer ${adminToken}`)
+        .send({ body: "wrong conversation" });
+
+      const res = await request(app)
+        .post(`/api/chat/conversations/${convStaff.body.id}/messages`)
+        .set("Authorization", `Bearer ${adminToken}`)
+        .send({ body: "a reply", replyToId: inOtherConv.body.id });
+      assert.equal(res.status, 400);
+    });
+
+    test("400 when replyToId references an already-deleted message", async () => {
+      const conv = await createConversation(adminToken, staffUser.id);
+      const original = await request(app)
+        .post(`/api/chat/conversations/${conv.body.id}/messages`)
+        .set("Authorization", `Bearer ${adminToken}`)
+        .send({ body: "will be deleted" });
+      await request(app)
+        .delete(`/api/chat/conversations/${conv.body.id}/messages/${original.body.id}`)
+        .set("Authorization", `Bearer ${adminToken}`);
+
+      const res = await request(app)
+        .post(`/api/chat/conversations/${conv.body.id}/messages`)
+        .set("Authorization", `Bearer ${staffToken}`)
+        .send({ body: "a reply", replyToId: original.body.id });
+      assert.equal(res.status, 400);
+    });
+
+    test("400 when replyToId is not an integer", async () => {
+      const conv = await createConversation(adminToken, staffUser.id);
+      const res = await request(app)
+        .post(`/api/chat/conversations/${conv.body.id}/messages`)
+        .set("Authorization", `Bearer ${adminToken}`)
+        .send({ body: "a reply", replyToId: "not-a-number" });
+      assert.equal(res.status, 400);
     });
   });
 
@@ -1010,6 +1186,69 @@ describe("Chat API", () => {
     });
   });
 
+  describe("POST/DELETE /chat/conversations/:id/pin", () => {
+    async function createConversation(token, userId) {
+      return request(app)
+        .post("/api/chat/conversations")
+        .set("Authorization", `Bearer ${token}`)
+        .send({ userId });
+    }
+
+    test("requires authentication", async () => {
+      const res = await request(app).post("/api/chat/conversations/1/pin").send({});
+      assert.equal(res.status, 401);
+    });
+
+    test("404 for a non-participant", async () => {
+      const conv = await createConversation(adminToken, staffUser.id);
+      const res = await request(app)
+        .post(`/api/chat/conversations/${conv.body.id}/pin`)
+        .set("Authorization", `Bearer ${otherToken}`)
+        .send({});
+      assert.equal(res.status, 404);
+    });
+
+    test("pins for the caller only, sorts pinned conversations first, and unpin restores normal ordering", async () => {
+      const convStaff = await createConversation(adminToken, staffUser.id);
+      const convOther = await createConversation(adminToken, otherUser.id);
+
+      // Give convOther a more recent message so it would normally sort above
+      // convStaff — pinning convStaff should override that.
+      await request(app)
+        .post(`/api/chat/conversations/${convOther.body.id}/messages`)
+        .set("Authorization", `Bearer ${otherToken}`)
+        .send({ body: "hi" });
+
+      const pinRes = await request(app)
+        .post(`/api/chat/conversations/${convStaff.body.id}/pin`)
+        .set("Authorization", `Bearer ${adminToken}`)
+        .send({});
+      assert.equal(pinRes.status, 204);
+
+      const list = await request(app).get("/api/chat/conversations").set("Authorization", `Bearer ${adminToken}`);
+      assert.equal(list.body[0].id, convStaff.body.id, "pinned conversation must sort first");
+      assert.equal(list.body[0].pinned, true);
+      assert.equal(list.body[1].pinned, false);
+
+      // The other participant never sees it as pinned — this is per-side, not shared.
+      const staffList = await request(app)
+        .get("/api/chat/conversations")
+        .set("Authorization", `Bearer ${staffToken}`);
+      assert.equal(staffList.body.find((c) => c.id === convStaff.body.id).pinned, false);
+
+      const unpinRes = await request(app)
+        .delete(`/api/chat/conversations/${convStaff.body.id}/pin`)
+        .set("Authorization", `Bearer ${adminToken}`);
+      assert.equal(unpinRes.status, 204);
+
+      const afterList = await request(app)
+        .get("/api/chat/conversations")
+        .set("Authorization", `Bearer ${adminToken}`);
+      assert.equal(afterList.body[0].id, convOther.body.id, "unpinning restores recency ordering");
+      assert.equal(afterList.body.find((c) => c.id === convStaff.body.id).pinned, false);
+    });
+  });
+
   describe("POST /chat/conversations/:id/mute and /unmute", () => {
     async function createConversation(token, userId) {
       return request(app)
@@ -1272,5 +1511,350 @@ describe("Chat API", () => {
       const res = await request(app).delete("/api/users/me").set("Authorization", `Bearer ${nochatToken}`);
       assert.equal(res.status, 204);
     });
+  });
+});
+
+describe("link previews on messages", () => {
+  beforeEach(resetDb);
+
+  // The URLs below are blocked by the SSRF fence, so resolution lands on a
+  // "failed" row — which is exactly what these tests assert about the
+  // *plumbing*: that a preview is resolved, attached, and published at all.
+  // Successful unfurling is covered by tests/linkPreview.test.js.
+  async function conversationWith(bodyText) {
+    const alice = await createUser({ email: "alice@example.com" });
+    const bob = await createUser({ email: "bob@example.com" });
+    await makeFriends(alice, bob);
+    const token = await login("alice@example.com", "password123");
+
+    const convo = await request(app)
+      .post("/api/chat/conversations")
+      .set("Authorization", `Bearer ${token}`)
+      .send({ userId: bob.id });
+
+    return { alice, bob, token, conversationId: convo.body.id, bodyText };
+  }
+
+  test("announces a resolved preview over SSE", async () => {
+    const ctx = await conversationWith("check http://169.254.169.254/ out");
+    const eventPromise = waitForEvent(ctx.bob.id, "link-preview", 5000);
+
+    await request(app)
+      .post(`/api/chat/conversations/${ctx.conversationId}/messages`)
+      .set("Authorization", `Bearer ${ctx.token}`)
+      .send({ body: ctx.bodyText })
+      .expect(201);
+
+    const event = await eventPromise;
+    assert.equal(event.conversationId, ctx.conversationId);
+    assert.ok(event.messageId);
+  });
+
+  test("does not resolve anything for a message with no URL", async () => {
+    const ctx = await conversationWith("no links here at all");
+    await request(app)
+      .post(`/api/chat/conversations/${ctx.conversationId}/messages`)
+      .set("Authorization", `Bearer ${ctx.token}`)
+      .send({ body: ctx.bodyText })
+      .expect(201);
+
+    await new Promise((resolve) => setTimeout(resolve, 300));
+    assert.equal(await prisma.linkPreview.count(), 0);
+  });
+
+  test("clears the preview when the message is deleted", async () => {
+    const ctx = await conversationWith("http://169.254.169.254/");
+    const sent = await request(app)
+      .post(`/api/chat/conversations/${ctx.conversationId}/messages`)
+      .set("Authorization", `Bearer ${ctx.token}`)
+      .send({ body: ctx.bodyText });
+
+    await request(app)
+      .delete(`/api/chat/conversations/${ctx.conversationId}/messages/${sent.body.id}`)
+      .set("Authorization", `Bearer ${ctx.token}`)
+      .expect(200);
+
+    const row = await prisma.message.findUnique({ where: { id: sent.body.id } });
+    assert.equal(row.linkPreviewId, null);
+  });
+
+  test("GET messages exposes the preview but never the stored image bytes", async () => {
+    const ctx = await conversationWith("hello");
+    const sent = await request(app)
+      .post(`/api/chat/conversations/${ctx.conversationId}/messages`)
+      .set("Authorization", `Bearer ${ctx.token}`)
+      .send({ body: ctx.bodyText });
+
+    const preview = await prisma.linkPreview.create({
+      data: {
+        url: "https://example.com/stored",
+        status: "ok",
+        title: "Stored",
+        siteName: "Example",
+        imageData: Buffer.from([0x89, 0x50, 0x4e, 0x47]),
+        imageMimeType: "image/png",
+      },
+    });
+    await prisma.message.update({ where: { id: sent.body.id }, data: { linkPreviewId: preview.id } });
+
+    const res = await request(app)
+      .get(`/api/chat/conversations/${ctx.conversationId}/messages`)
+      .set("Authorization", `Bearer ${ctx.token}`)
+      .expect(200);
+
+    const message = res.body.data.find((m) => m.id === sent.body.id);
+    assert.equal(message.linkPreview.title, "Stored");
+    assert.equal(message.linkPreview.hasImage, true);
+    assert.equal(message.linkPreview.imageData, undefined);
+  });
+
+  test("a failed preview is not exposed as a card", async () => {
+    const ctx = await conversationWith("hello");
+    const sent = await request(app)
+      .post(`/api/chat/conversations/${ctx.conversationId}/messages`)
+      .set("Authorization", `Bearer ${ctx.token}`)
+      .send({ body: ctx.bodyText });
+
+    const preview = await prisma.linkPreview.create({
+      data: { url: "https://example.com/dead", status: "failed" },
+    });
+    await prisma.message.update({ where: { id: sent.body.id }, data: { linkPreviewId: preview.id } });
+
+    const res = await request(app)
+      .get(`/api/chat/conversations/${ctx.conversationId}/messages`)
+      .set("Authorization", `Bearer ${ctx.token}`)
+      .expect(200);
+
+    assert.equal(res.body.data.find((m) => m.id === sent.body.id).linkPreview, null);
+  });
+});
+
+describe("GET link preview image", () => {
+  beforeEach(resetDb);
+
+  async function messageWithStoredImage() {
+    const alice = await createUser({ email: "alice@example.com" });
+    const bob = await createUser({ email: "bob@example.com" });
+    const carol = await createUser({ email: "carol@example.com" });
+    await makeFriends(alice, bob);
+    const aliceToken = await login("alice@example.com", "password123");
+    const carolToken = await login("carol@example.com", "password123");
+
+    const convo = await request(app)
+      .post("/api/chat/conversations")
+      .set("Authorization", `Bearer ${aliceToken}`)
+      .send({ userId: bob.id });
+    const sent = await request(app)
+      .post(`/api/chat/conversations/${convo.body.id}/messages`)
+      .set("Authorization", `Bearer ${aliceToken}`)
+      .send({ body: "hello" });
+
+    const preview = await prisma.linkPreview.create({
+      data: {
+        url: "https://example.com/stored",
+        status: "ok",
+        title: "Stored",
+        imageData: Buffer.from([0x89, 0x50, 0x4e, 0x47]),
+        imageMimeType: "image/png",
+      },
+    });
+    await prisma.message.update({ where: { id: sent.body.id }, data: { linkPreviewId: preview.id } });
+
+    return { aliceToken, carolToken, conversationId: convo.body.id, messageId: sent.body.id };
+  }
+
+  test("serves the stored bytes to a participant", async () => {
+    const ctx = await messageWithStoredImage();
+    const res = await request(app)
+      .get(`/api/chat/conversations/${ctx.conversationId}/messages/${ctx.messageId}/link-preview-image`)
+      .set("Authorization", `Bearer ${ctx.aliceToken}`)
+      .expect(200);
+
+    assert.equal(res.headers["content-type"], "image/png");
+    assert.deepEqual([...res.body], [0x89, 0x50, 0x4e, 0x47]);
+  });
+
+  test("404s for a non-participant", async () => {
+    const ctx = await messageWithStoredImage();
+    await request(app)
+      .get(`/api/chat/conversations/${ctx.conversationId}/messages/${ctx.messageId}/link-preview-image`)
+      .set("Authorization", `Bearer ${ctx.carolToken}`)
+      .expect(404);
+  });
+
+  test("404s when the message has no preview", async () => {
+    const alice = await createUser({ email: "alice@example.com" });
+    const bob = await createUser({ email: "bob@example.com" });
+    await makeFriends(alice, bob);
+    const token = await login("alice@example.com", "password123");
+    const convo = await request(app)
+      .post("/api/chat/conversations")
+      .set("Authorization", `Bearer ${token}`)
+      .send({ userId: bob.id });
+    const sent = await request(app)
+      .post(`/api/chat/conversations/${convo.body.id}/messages`)
+      .set("Authorization", `Bearer ${token}`)
+      .send({ body: "no preview here" });
+
+    await request(app)
+      .get(`/api/chat/conversations/${convo.body.id}/messages/${sent.body.id}/link-preview-image`)
+      .set("Authorization", `Bearer ${token}`)
+      .expect(404);
+  });
+});
+
+describe("disappearing messages", () => {
+  beforeEach(resetDb);
+
+  async function setup() {
+    const alice = await createUser({ email: "alice@example.com" });
+    const bob = await createUser({ email: "bob@example.com" });
+    const carol = await createUser({ email: "carol@example.com" });
+    await makeFriends(alice, bob);
+    const aliceToken = await login("alice@example.com", "password123");
+    const bobToken = await login("bob@example.com", "password123");
+    const carolToken = await login("carol@example.com", "password123");
+    const convo = await request(app)
+      .post("/api/chat/conversations")
+      .set("Authorization", `Bearer ${aliceToken}`)
+      .send({ userId: bob.id });
+    return { alice, bob, aliceToken, bobToken, carolToken, conversationId: convo.body.id };
+  }
+
+  test("accepts each allowed duration and turning it off", async () => {
+    const ctx = await setup();
+    for (const seconds of [300, 3600, 86400, 604800]) {
+      await request(app)
+        .post(`/api/chat/conversations/${ctx.conversationId}/disappearing`)
+        .set("Authorization", `Bearer ${ctx.aliceToken}`)
+        .send({ seconds })
+        .expect(200);
+      const row = await prisma.conversation.findUnique({ where: { id: ctx.conversationId } });
+      assert.equal(row.disappearingSeconds, seconds);
+    }
+
+    await request(app)
+      .post(`/api/chat/conversations/${ctx.conversationId}/disappearing`)
+      .set("Authorization", `Bearer ${ctx.aliceToken}`)
+      .send({ seconds: null })
+      .expect(200);
+    const off = await prisma.conversation.findUnique({ where: { id: ctx.conversationId } });
+    assert.equal(off.disappearingSeconds, null);
+  });
+
+  test("rejects a duration outside the allowed set", async () => {
+    const ctx = await setup();
+    for (const seconds of [1, 999, -300, "an hour"]) {
+      await request(app)
+        .post(`/api/chat/conversations/${ctx.conversationId}/disappearing`)
+        .set("Authorization", `Bearer ${ctx.aliceToken}`)
+        .send({ seconds })
+        .expect(400);
+    }
+  });
+
+  test("either participant can set it, and a non-participant gets 404", async () => {
+    const ctx = await setup();
+    await request(app)
+      .post(`/api/chat/conversations/${ctx.conversationId}/disappearing`)
+      .set("Authorization", `Bearer ${ctx.bobToken}`)
+      .send({ seconds: 3600 })
+      .expect(200);
+
+    await request(app)
+      .post(`/api/chat/conversations/${ctx.conversationId}/disappearing`)
+      .set("Authorization", `Bearer ${ctx.carolToken}`)
+      .send({ seconds: 3600 })
+      .expect(404);
+  });
+
+  test("publishes the change to both participants", async () => {
+    const ctx = await setup();
+    const aliceEvent = waitForEvent(ctx.alice.id, "disappearing-changed");
+    const bobEvent = waitForEvent(ctx.bob.id, "disappearing-changed");
+
+    await request(app)
+      .post(`/api/chat/conversations/${ctx.conversationId}/disappearing`)
+      .set("Authorization", `Bearer ${ctx.aliceToken}`)
+      .send({ seconds: 3600 })
+      .expect(200);
+
+    for (const payload of await Promise.all([aliceEvent, bobEvent])) {
+      assert.equal(payload.conversationId, ctx.conversationId);
+      assert.equal(payload.seconds, 3600);
+    }
+  });
+
+  test("stamps expiresAt on a message sent while the timer is on", async () => {
+    const ctx = await setup();
+    await request(app)
+      .post(`/api/chat/conversations/${ctx.conversationId}/disappearing`)
+      .set("Authorization", `Bearer ${ctx.aliceToken}`)
+      .send({ seconds: 3600 });
+
+    const sent = await request(app)
+      .post(`/api/chat/conversations/${ctx.conversationId}/messages`)
+      .set("Authorization", `Bearer ${ctx.aliceToken}`)
+      .send({ body: "ephemeral" })
+      .expect(201);
+
+    const row = await prisma.message.findUnique({ where: { id: sent.body.id } });
+    assert.ok(row.expiresAt, "expected expiresAt to be set");
+    const deltaMs = row.expiresAt.getTime() - row.createdAt.getTime();
+    assert.ok(Math.abs(deltaMs - 3600_000) < 2000, `expected ~1h, got ${deltaMs}ms`);
+    assert.ok(sent.body.expiresAt, "expected expiresAt on the response payload too");
+  });
+
+  test("leaves expiresAt null while the timer is off", async () => {
+    const ctx = await setup();
+    const sent = await request(app)
+      .post(`/api/chat/conversations/${ctx.conversationId}/messages`)
+      .set("Authorization", `Bearer ${ctx.aliceToken}`)
+      .send({ body: "permanent" })
+      .expect(201);
+
+    const row = await prisma.message.findUnique({ where: { id: sent.body.id } });
+    assert.equal(row.expiresAt, null);
+  });
+
+  // The property that makes the feature comprehensible: the sender knew the
+  // message's lifetime when they sent it, and nobody can reach back later.
+  test("changing the timer does not retroact on messages already sent", async () => {
+    const ctx = await setup();
+    await request(app)
+      .post(`/api/chat/conversations/${ctx.conversationId}/disappearing`)
+      .set("Authorization", `Bearer ${ctx.aliceToken}`)
+      .send({ seconds: 3600 });
+    const sent = await request(app)
+      .post(`/api/chat/conversations/${ctx.conversationId}/messages`)
+      .set("Authorization", `Bearer ${ctx.aliceToken}`)
+      .send({ body: "sent under the 1h timer" });
+    const before = await prisma.message.findUnique({ where: { id: sent.body.id } });
+
+    // Both a longer timer and turning it off entirely must leave it alone.
+    for (const seconds of [604800, null]) {
+      await request(app)
+        .post(`/api/chat/conversations/${ctx.conversationId}/disappearing`)
+        .set("Authorization", `Bearer ${ctx.bobToken}`)
+        .send({ seconds })
+        .expect(200);
+      const after = await prisma.message.findUnique({ where: { id: sent.body.id } });
+      assert.equal(after.expiresAt.getTime(), before.expiresAt.getTime());
+    }
+  });
+
+  test("GET conversations exposes the current setting", async () => {
+    const ctx = await setup();
+    await request(app)
+      .post(`/api/chat/conversations/${ctx.conversationId}/disappearing`)
+      .set("Authorization", `Bearer ${ctx.aliceToken}`)
+      .send({ seconds: 86400 });
+
+    const res = await request(app)
+      .get("/api/chat/conversations")
+      .set("Authorization", `Bearer ${ctx.bobToken}`)
+      .expect(200);
+
+    assert.equal(res.body.find((c) => c.id === ctx.conversationId).disappearingSeconds, 86400);
   });
 });

@@ -801,6 +801,23 @@ label {
   text-decoration: none;
 }
 
+/* .chat-conversation-row is now the outer div (padding/border/hover live
+   here), because the pin button needs to sit next to the link rather than
+   inside it — a <button> nested in an <a> is invalid HTML and confuses tab
+   order. .chat-conversation-link carries just the flex layout the row used
+   to have, unstyled otherwise, and min-width: 0 so its text can still
+   ellipsis-truncate inside a flex row (the default min-width: auto on a
+   flex item would let long names overflow instead). */
+.chat-conversation-link {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex: 1;
+  min-width: 0;
+  color: inherit;
+  text-decoration: none;
+}
+
 .chat-conversation-row:hover:not(:disabled),
 .chat-user-result:hover:not(:disabled) {
   background: var(--bg-subtle);
@@ -817,6 +834,43 @@ label {
 .chat-conversation-row.active:hover {
   background: var(--accent-soft);
   border-left-color: var(--accent-hover);
+}
+
+.chat-conversation-pin-btn {
+  flex-shrink: 0;
+  min-width: var(--tap-compact);
+  min-height: var(--tap-compact);
+  background: none;
+  border: none;
+  border-radius: var(--radius);
+  color: var(--text-muted);
+  cursor: pointer;
+  font-size: 15px;
+  /* Unpinned rows don't need a visible pin icon cluttering every row — it
+     appears on hover/focus (mouse or keyboard) and whenever this row's own
+     conversation is already pinned, so a pinned row's marker never
+     disappears just because the pointer moved away. */
+  opacity: 0;
+}
+
+.chat-conversation-row:hover .chat-conversation-pin-btn,
+.chat-conversation-pin-btn:focus-visible,
+.chat-conversation-pin-btn.pinned {
+  opacity: 1;
+}
+
+.chat-conversation-pin-btn:hover:not(:disabled) {
+  background: var(--bg-raised);
+  color: var(--accent);
+}
+
+.chat-conversation-pin-btn.pinned {
+  color: var(--accent);
+}
+
+.chat-muted-indicator {
+  flex-shrink: 0;
+  font-size: 13px;
 }
 
 .chat-avatar {
@@ -1101,6 +1155,27 @@ img.chat-avatar {
   flex: 1;
 }
 
+/* Sits with the icon buttons in the thread header, but stays a real <select>
+   — the four durations plus off need labels, and a native select gets
+   keyboard and screen-reader behaviour for free. */
+.chat-thread-disappearing {
+  flex-shrink: 0;
+  min-height: var(--tap);
+  max-width: 190px;
+  background: none;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  color: var(--text-muted);
+  cursor: pointer;
+  font-size: 13px;
+  padding: 0 6px;
+}
+
+.chat-thread-disappearing:hover {
+  color: var(--accent);
+  border-color: var(--border-strong);
+}
+
 /* Transparent icon buttons must restate `color`. Nulling out `background`
    and `border` alone leaves them inheriting `color: var(--accent-contrast)`
    (#fff) from the base button rule, which on this --bg-raised header is
@@ -1317,6 +1392,122 @@ img.chat-avatar {
   font-weight: 600;
 }
 
+/* The quoted snippet a reply carries. border-left in currentColor tracks
+   whichever text colour the surrounding .mine/.theirs bubble already set,
+   so this needs no colour of its own — only the two backgrounds below are
+   bubble-side-specific, since a flat tint that looked right against the
+   dark "mine" fill would be too pale against "theirs"' light one. */
+.chat-bubble-quote {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 6px 10px;
+  margin-bottom: 6px;
+  border-left: 3px solid currentColor;
+  border-radius: 4px;
+  font-size: 13px;
+  line-height: 1.3;
+  opacity: 0.85;
+}
+
+.chat-bubble-quote-name {
+  font-weight: 600;
+}
+
+.chat-bubble-quote-body {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.chat-bubble-row.mine .chat-bubble-quote {
+  background: rgb(255 255 255 / 15%);
+}
+
+.chat-bubble-row.theirs .chat-bubble-quote {
+  background: var(--bg-raised);
+}
+
+/* A linkified URL sits on whatever fill its bubble has — dark for "mine",
+   light for "theirs" — so the default link colour is illegible on one of
+   them. Inherit the bubble's own text colour and lean on the underline to
+   signal it's a link. Excludes the preview card, which is itself an anchor
+   but must not be underlined. */
+.chat-bubble a:not(.chat-link-preview) {
+  color: inherit;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+.chat-bubble a:not(.chat-link-preview):hover {
+  opacity: 0.8;
+}
+
+/* The unfurled card under a bubble. Tinted per bubble side for the same
+   reason .chat-bubble-quote above is: a flat fill that reads correctly
+   against the dark "mine" bubble is washed out against the light "theirs"
+   one. The thumbnail is same-origin (the server stored the bytes), so no CSP
+   change was needed to show it. */
+.chat-link-preview {
+  display: flex;
+  flex-direction: column;
+  margin-top: 8px;
+  border: 1px solid currentColor;
+  border-radius: 6px;
+  overflow: hidden;
+  text-decoration: none;
+  color: inherit;
+  opacity: 0.9;
+}
+
+.chat-link-preview:hover {
+  opacity: 1;
+}
+
+.chat-link-preview-image {
+  width: 100%;
+  max-height: 160px;
+  object-fit: cover;
+  display: block;
+}
+
+.chat-link-preview-text {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 8px 10px;
+  font-size: 13px;
+  line-height: 1.35;
+}
+
+.chat-link-preview-site {
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  opacity: 0.75;
+}
+
+.chat-link-preview-title {
+  font-weight: 600;
+}
+
+.chat-link-preview-description {
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  opacity: 0.85;
+}
+
+.chat-bubble-row.mine .chat-link-preview {
+  background: rgb(255 255 255 / 12%);
+}
+
+.chat-bubble-row.theirs .chat-link-preview {
+  background: var(--bg-raised);
+}
+
 .chat-bubble-edit {
   display: flex;
   flex-direction: column;
@@ -1443,6 +1634,40 @@ img.chat-avatar {
   font-size: 12px;
   font-style: italic;
   color: var(--text-muted);
+}
+
+/* Sits directly above .chat-composer, same flex-row-with-a-close-button
+   shape as .chat-search-bar just above it in the thread pane. */
+.chat-reply-banner {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 16px;
+  border-top: 1px solid var(--border);
+  background: var(--bg-subtle);
+}
+
+.chat-reply-banner-text {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+
+.chat-reply-banner-name {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--accent);
+}
+
+.chat-reply-banner-body {
+  font-size: 13px;
+  color: var(--text-muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .chat-composer {

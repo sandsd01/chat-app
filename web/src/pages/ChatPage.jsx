@@ -15,11 +15,18 @@ import {
   searchMessages,
   addReaction,
   removeReaction,
+  exportConversation,
 } from '../api/chat'
 import { EmojiPicker } from '../components/EmojiPicker'
+import LinkPreviewCard from '../components/LinkPreviewCard'
 import { localeFor, CLEARED_ATTACHMENT_FIELDS } from '../lib/format'
+import { linkifyText } from '../lib/linkify'
 import { Avatar } from '../components/Avatar'
 import { useDocumentTitle } from '../hooks/useDocumentTitle'
+
+// Must stay in step with DISAPPEARING_SECONDS in src/routes/chat.js, which
+// validates against its own fixed set — the server rejects anything else.
+const DISAPPEARING_OPTIONS = [300, 3600, 86400, 604800]
 
 const MESSAGE_PAGE_SIZE = 50
 const SCROLL_BOTTOM_THRESHOLD = 80
@@ -66,8 +73,12 @@ export function ChatPage() {
     subscribeToMessageDeleted,
     subscribeToReactionAdded,
     subscribeToReactionRemoved,
+    subscribeToLinkPreview,
+    subscribeToMessageExpired,
     markConversationRead,
     setConversationMuted,
+    setConversationPinned,
+    changeDisappearing,
     startChat,
   } = useChat()
   const { friends } = useFriends()
@@ -92,9 +103,13 @@ export function ChatPage() {
           const email = c.otherUser.email.toLowerCase()
           return name.includes(q) || email.includes(q)
         })
-    return [...list].sort(
-      (a, b) => new Date(b.lastMessageAt ?? b.createdAt) - new Date(a.lastMessageAt ?? a.createdAt)
-    )
+    // Pinned-first, matching GET /conversations' own sort — the list here is
+    // re-sorted after every optimistic update (e.g. searching), so it has to
+    // reapply the same rule rather than just trusting the fetch order.
+    return [...list].sort((a, b) => {
+      if (a.pinned !== b.pinned) return a.pinned ? -1 : 1
+      return new Date(b.lastMessageAt ?? b.createdAt) - new Date(a.lastMessageAt ?? a.createdAt)
+    })
   }, [conversations, query])
 
   const visibleFriends = useMemo(() => {
@@ -147,11 +162,17 @@ export function ChatPage() {
   const [draft, setDraft] = useState('')
   const [editingMessageId, setEditingMessageId] = useState(null)
   const [editingDraft, setEditingDraft] = useState('')
+  // Holds the message being quoted, not just its id — the composer banner
+  // needs to show who/what without a lookup, and the message stays
+  // available even if it scrolls out of the loaded page while replying.
+  const [replyingTo, setReplyingTo] = useState(null)
   const [emojiPickerOpen, setEmojiPickerOpen] = useState(false)
   const [reactionPickerMessageId, setReactionPickerMessageId] = useState(null)
   const [uploadBusy, setUploadBusy] = useState(false)
   const [uploadError, setUploadError] = useState(null)
   const fileInputRef = useRef(null)
+  const [exportBusy, setExportBusy] = useState(false)
+  const [exportError, setExportError] = useState(null)
 
   const messagesElRef = useRef(null)
   const isAtBottomRef = useRef(true)
@@ -355,6 +376,27 @@ export function ChatPage() {
     })
   }, [activeConversationId, subscribeToReactionRemoved, user.id])
 
+  // Arrives a beat after the message itself — the server unfurls the link out
+  // of band so a slow site can't hold up the send. Also clears the card when
+  // an edit removed the URL, since the payload's linkPreview is then null.
+  useEffect(() => {
+    if (!activeConversationId) return undefined
+    return subscribeToLinkPreview(activeConversationId, (payload) => {
+      setMessages((prev) =>
+        prev.map((m) => (m.id === payload.messageId ? { ...m, linkPreview: payload.linkPreview } : m))
+      )
+    })
+  }, [activeConversationId, subscribeToLinkPreview])
+
+  // Removed outright rather than tombstoned the way message-deleted is: an
+  // expired message leaves nothing behind, so neither should its bubble.
+  useEffect(() => {
+    if (!activeConversationId) return undefined
+    return subscribeToMessageExpired(activeConversationId, (payload) => {
+      setMessages((prev) => prev.filter((m) => m.id !== payload.id))
+    })
+  }, [activeConversationId, subscribeToMessageExpired])
+
   function toggleReaction(message, emoji) {
     const alreadyMine = message.reactions?.find((r) => r.emoji === emoji)?.mine
     const action = alreadyMine ? removeReaction : addReaction
@@ -447,9 +489,9 @@ export function ChatPage() {
     }
   }
 
-  async function attemptSend(conversationId, body, tempId) {
+  async function attemptSend(conversationId, body, tempId, replyToId) {
     try {
-      const real = await sendMessage(conversationId, { body }, token)
+      const real = await sendMessage(conversationId, { body, replyToId }, token)
       setMessages((prev) => {
         if (prev.some((m) => m.id === real.id)) return prev.filter((m) => m.id !== tempId)
         return prev.map((m) => (m.id === tempId ? real : m))
@@ -464,6 +506,15 @@ export function ChatPage() {
     const body = draft.trim()
     if (!body || !activeConversationId || messagesLoading) return
     setDraft('')
+    const replyToId = replyingTo?.id ?? null
+    // The optimistic bubble reuses replyingTo directly as its quoted
+    // snippet — same {id, senderId, body, deletedAt} shape the server
+    // returns, so no special-casing is needed once the real message
+    // replaces it.
+    const replyToSnippet = replyingTo
+      ? { id: replyingTo.id, senderId: replyingTo.senderId, body: replyingTo.body, deletedAt: replyingTo.deletedAt }
+      : null
+    setReplyingTo(null)
     const tempId = `temp-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
     const optimistic = {
       id: tempId,
@@ -472,11 +523,12 @@ export function ChatPage() {
       body,
       createdAt: new Date().toISOString(),
       pending: true,
+      replyTo: replyToSnippet,
     }
     setMessages((prev) => [...prev, optimistic])
     isAtBottomRef.current = true
     requestAnimationFrame(scrollToBottom)
-    attemptSend(activeConversationId, body, tempId)
+    attemptSend(activeConversationId, body, tempId, replyToId)
   }
 
   async function handleFileSelected(e) {
@@ -504,11 +556,34 @@ export function ChatPage() {
     }
   }
 
+  async function handleExport(conversationId) {
+    setExportError(null)
+    setExportBusy(true)
+    try {
+      const result = await exportConversation(conversationId, token)
+      // The route already sends Content-Disposition: attachment, but that
+      // only matters for a plain `<a href>` navigation — a fetch() response
+      // (which apiFetch always is) never triggers a browser download on its
+      // own, so the file has to be built and "clicked" here instead.
+      const blob = new Blob([JSON.stringify(result, null, 2)], { type: 'application/json' })
+      const url = URL.createObjectURL(blob)
+      const link = document.createElement('a')
+      link.href = url
+      link.download = `conversation-${conversationId}.json`
+      link.click()
+      URL.revokeObjectURL(url)
+    } catch (err) {
+      setExportError(err.message)
+    } finally {
+      setExportBusy(false)
+    }
+  }
+
   function handleRetry(tempId) {
     const msg = messages.find((m) => m.id === tempId)
     if (!msg) return
     setMessages((prev) => prev.map((m) => (m.id === tempId ? { ...m, pending: true, failed: false } : m)))
-    attemptSend(activeConversationId, msg.body, tempId)
+    attemptSend(activeConversationId, msg.body, tempId, msg.replyTo?.id ?? null)
   }
 
   const threadHeaderName = activeConversation
@@ -590,36 +665,57 @@ export function ChatPage() {
                 </div>
               )
             ) : (
-              filteredConversations.map((c) => {
+              filteredConversations.map((c, index) => {
                 const name = c.otherUser.name || c.otherUser.email
                 const unread = c.unreadCount > 0
+                // Only shown outside an active search — searching flattens
+                // the list to matches, where a "Pinned" divider would just
+                // be noise ahead of the thing being searched for.
+                const showPinnedLabel = !trimmedQuery && c.pinned && index === 0
                 return (
-                  <Link
-                    key={c.id}
-                    to={`/chat/${c.id}`}
-                    className={`chat-conversation-row${c.id === activeConversationId ? ' active' : ''}${
-                      unread ? ' unread' : ''
-                    }`}
-                  >
-                    <Avatar user={c.otherUser} isOnline={c.otherUser?.isOnline} />
-                    <span className="chat-conversation-main">
-                      <span className={`chat-conversation-name${unread ? ' unread' : ''}`}>
-                        {name}
-                        {c.otherUser?.isOnline && <span className="sr-only"> · {t('presence.online')}</span>}
-                      </span>
-                      <span className={`chat-conversation-preview${unread ? ' unread' : ''}`}>
-                        {c.lastMessage ? c.lastMessage.body : t('chat.startNewChat')}
-                      </span>
-                    </span>
-                    <span className="chat-conversation-meta">
-                      <span className="chat-timestamp">
-                        {formatListTimestamp(c.lastMessageAt ?? c.createdAt, language)}
-                      </span>
-                      {unread && (
-                        <span className="chat-unread-badge">{c.unreadCount > 99 ? '99+' : c.unreadCount}</span>
-                      )}
-                    </span>
-                  </Link>
+                  <div key={c.id}>
+                    {showPinnedLabel && <div className="chat-list-section-label">{t('chat.pinnedSection')}</div>}
+                    <div
+                      className={`chat-conversation-row${c.id === activeConversationId ? ' active' : ''}${
+                        unread ? ' unread' : ''
+                      }`}
+                    >
+                      <Link to={`/chat/${c.id}`} className="chat-conversation-link">
+                        <Avatar user={c.otherUser} isOnline={c.otherUser?.isOnline} />
+                        <span className="chat-conversation-main">
+                          <span className={`chat-conversation-name${unread ? ' unread' : ''}`}>
+                            {name}
+                            {c.otherUser?.isOnline && <span className="sr-only"> · {t('presence.online')}</span>}
+                          </span>
+                          <span className={`chat-conversation-preview${unread ? ' unread' : ''}`}>
+                            {c.lastMessage ? c.lastMessage.body : t('chat.startNewChat')}
+                          </span>
+                        </span>
+                        <span className="chat-conversation-meta">
+                          <span className="chat-timestamp">
+                            {formatListTimestamp(c.lastMessageAt ?? c.createdAt, language)}
+                          </span>
+                          {unread && (
+                            <span className="chat-unread-badge">{c.unreadCount > 99 ? '99+' : c.unreadCount}</span>
+                          )}
+                          {c.muted && (
+                            <span className="chat-muted-indicator" aria-label={t('chat.mutedIndicator')} title={t('chat.mutedIndicator')}>
+                              🔕
+                            </span>
+                          )}
+                        </span>
+                      </Link>
+                      <button
+                        type="button"
+                        className={`chat-conversation-pin-btn${c.pinned ? ' pinned' : ''}`}
+                        aria-label={c.pinned ? t('chat.unpin') : t('chat.pin')}
+                        aria-pressed={c.pinned}
+                        onClick={() => setConversationPinned(c.id, !c.pinned)}
+                      >
+                        📌
+                      </button>
+                    </div>
+                  </div>
                 )
               })
             )}
@@ -656,6 +752,23 @@ export function ChatPage() {
                 </span>
                 <span className="chat-thread-header-spacer" />
                 {activeConversation && (
+                  <select
+                    className="chat-thread-disappearing"
+                    aria-label={t('chat.disappearingMessages')}
+                    value={activeConversation.disappearingSeconds ?? ''}
+                    onChange={(e) =>
+                      changeDisappearing(activeConversation.id, e.target.value ? Number(e.target.value) : null)
+                    }
+                  >
+                    <option value="">{t('chat.disappearingOff')}</option>
+                    {DISAPPEARING_OPTIONS.map((seconds) => (
+                      <option key={seconds} value={seconds}>
+                        {t(`chat.disappearing${seconds}`)}
+                      </option>
+                    ))}
+                  </select>
+                )}
+                {activeConversation && (
                   <button
                     type="button"
                     className="chat-thread-mute-btn"
@@ -666,6 +779,15 @@ export function ChatPage() {
                     {activeConversation.muted ? '🔕' : '🔔'}
                   </button>
                 )}
+                <button
+                  type="button"
+                  className="chat-thread-search-btn"
+                  aria-label={t('chat.exportConversation')}
+                  disabled={exportBusy}
+                  onClick={() => handleExport(activeConversationId)}
+                >
+                  {exportBusy ? '⏳' : '⬇️'}
+                </button>
                 <button
                   type="button"
                   className="chat-thread-search-btn"
@@ -780,6 +902,16 @@ export function ChatPage() {
                               </div>
                             ) : (
                               <div className="chat-bubble">
+                                {m.replyTo && (
+                                  <div className="chat-bubble-quote">
+                                    <span className="chat-bubble-quote-name">
+                                      {m.replyTo.senderId === user.id ? t('chat.you') : threadHeaderName}
+                                    </span>
+                                    <span className="chat-bubble-quote-body">
+                                      {m.replyTo.deletedAt ? t('chat.messageDeleted') : m.replyTo.body}
+                                    </span>
+                                  </div>
+                                )}
                                 {m.attachmentType === 'image' && (
                                   <a href={m.attachmentUrl} target="_blank" rel="noreferrer" className="chat-attachment-image-link">
                                     <img src={m.attachmentUrl} alt={m.attachmentName || ''} className="chat-attachment-image" />
@@ -802,16 +934,27 @@ export function ChatPage() {
                                     </span>
                                   </a>
                                 )}
-                                {m.body}
+                                {linkifyText(m.body)}
                                 {m.editedAt && <span className="chat-bubble-edited-tag"> {t('chat.edited')}</span>}
+                                {m.linkPreview && (
+                                  <LinkPreviewCard
+                                    preview={m.linkPreview}
+                                    conversationId={activeConversationId}
+                                    messageId={m.id}
+                                  />
+                                )}
                                 <span className="chat-bubble-time">
                                   {formatTime(m.createdAt, language)}
-                                  {mine &&
-                                    m.id === lastMineMessageId &&
-                                    otherLastReadAt &&
-                                    otherLastReadAt >= new Date(m.createdAt) && (
-                                      <span className="chat-bubble-read-tag"> · {t('chat.read')}</span>
-                                    )}
+                                  {mine && m.id === lastMineMessageId && (() => {
+                                    const isRead = otherLastReadAt && otherLastReadAt >= new Date(m.createdAt)
+                                    if (isRead) return <span className="chat-bubble-read-tag"> · {t('chat.read')}</span>
+                                    // Only known for a message sent this session (see the
+                                    // src/routes/chat.js comment on `delivered` — it isn't
+                                    // persisted, so a page reload loses it and the tag just
+                                    // stops showing rather than showing something false).
+                                    if (m.delivered) return <span className="chat-bubble-read-tag"> · {t('chat.delivered')}</span>
+                                    return null
+                                  })()}
                                 </span>
                               </div>
                             )}
@@ -855,6 +998,14 @@ export function ChatPage() {
                                     />
                                   )}
                                 </span>
+                                <button
+                                  type="button"
+                                  className="chat-bubble-action-btn"
+                                  aria-label={t('chat.reply')}
+                                  onClick={() => setReplyingTo(m)}
+                                >
+                                  ↩️
+                                </button>
                                 {mine && (
                                   <>
                                     <button
@@ -903,6 +1054,28 @@ export function ChatPage() {
                 {otherTyping && t('chat.typingIndicator', { name: threadHeaderName })}
               </div>
 
+              {replyingTo && (
+                <div className="chat-reply-banner">
+                  <span className="chat-reply-banner-text">
+                    <span className="chat-reply-banner-name">
+                      {t('chat.replyingTo', { name: replyingTo.senderId === user.id ? t('chat.you') : threadHeaderName })}
+                    </span>
+                    <span className="chat-reply-banner-body">
+                      {replyingTo.deletedAt ? t('chat.messageDeleted') : replyingTo.body}
+                    </span>
+                  </span>
+                  <button
+                    type="button"
+                    className="chat-thread-search-btn"
+                    aria-label={t('chat.cancelReply')}
+                    onClick={() => setReplyingTo(null)}
+                  >
+                    ✕
+                  </button>
+                </div>
+              )}
+
+              {exportError && <p className="error" role="alert">{exportError}</p>}
               {uploadError && <p className="error" role="alert">{uploadError}</p>}
               <form className="chat-composer" onSubmit={handleSend}>
                 <div className="chat-composer-emoji-wrap">

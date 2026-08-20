@@ -6,6 +6,9 @@ import {
   markRead as markReadApi,
   muteConversation as muteConversationApi,
   unmuteConversation as unmuteConversationApi,
+  pinConversation as pinConversationApi,
+  unpinConversation as unpinConversationApi,
+  setDisappearing as setDisappearingApi,
   getStreamTicket,
 } from '../api/chat'
 
@@ -65,6 +68,8 @@ export function ChatProvider({ children }) {
   const deletedListenersRef = useRef(new Map()) // conversationId -> Set<(payload) => void>
   const reactionAddedListenersRef = useRef(new Map()) // conversationId -> Set<(payload) => void>
   const reactionRemovedListenersRef = useRef(new Map()) // conversationId -> Set<(payload) => void>
+  const linkPreviewListenersRef = useRef(new Map()) // conversationId -> Set<(payload) => void>
+  const expiredListenersRef = useRef(new Map()) // conversationId -> Set<(payload) => void>
   const friendListenersRef = useRef(new Set())
   const esRef = useRef(null)
   const attemptRef = useRef(0)
@@ -128,6 +133,19 @@ export function ChatProvider({ children }) {
   )
   const subscribeToReactionAdded = useCallback(
     (conversationId, callback) => subscribeViaMap(reactionAddedListenersRef.current, conversationId, callback),
+    []
+  )
+  // Fired a moment after the message itself: the server resolves a preview
+  // out of band so a slow third-party site can't delay the send.
+  const subscribeToLinkPreview = useCallback(
+    (conversationId, callback) => subscribeViaMap(linkPreviewListenersRef.current, conversationId, callback),
+    []
+  )
+  // Distinct from subscribeToMessageDeleted: a deleted message keeps its
+  // bubble and shows a tombstone, an expired one is gone and the bubble goes
+  // with it.
+  const subscribeToMessageExpired = useCallback(
+    (conversationId, callback) => subscribeViaMap(expiredListenersRef.current, conversationId, callback),
     []
   )
   const subscribeToReactionRemoved = useCallback(
@@ -247,6 +265,19 @@ export function ChatProvider({ children }) {
     addJsonListener(es, 'reaction-removed', (payload) => {
       dispatchViaMap(reactionRemovedListenersRef.current, payload.conversationId, payload)
     })
+    addJsonListener(es, 'link-preview', (payload) => {
+      dispatchViaMap(linkPreviewListenersRef.current, payload.conversationId, payload)
+    })
+    addJsonListener(es, 'message-expired', (payload) => {
+      dispatchViaMap(expiredListenersRef.current, payload.conversationId, payload)
+    })
+    // Shared state, so both sides get told — the conversation list keeps the
+    // current timer for its header control.
+    addJsonListener(es, 'disappearing-changed', (payload) => {
+      setConversations((prev) =>
+        prev.map((c) => (c.id === payload.conversationId ? { ...c, disappearingSeconds: payload.seconds } : c))
+      )
+    })
     addJsonListener(es, 'read', (payload) => {
       updateOtherLastReadAt(payload.conversationId, payload.lastReadAt)
     })
@@ -313,6 +344,28 @@ export function ChatProvider({ children }) {
     [token]
   )
 
+  const setConversationPinned = useCallback(
+    async (conversationId, pinned) => {
+      setConversations((prev) => prev.map((c) => (c.id === conversationId ? { ...c, pinned } : c)))
+      try {
+        await (pinned ? pinConversationApi : unpinConversationApi)(conversationId, token)
+      } catch {
+        // Best-effort, same as setConversationMuted above — a failed toggle
+        // just means the setting reverts on the next full refresh.
+      }
+    },
+    [token]
+  )
+
+  // No optimistic flip and no refresh: the server publishes
+  // disappearing-changed to both participants, and this client is one of
+  // them, so its own SSE listener above applies the change. Patching here too
+  // would just apply it twice.
+  const changeDisappearing = useCallback(
+    (conversationId, seconds) => setDisappearingApi(conversationId, seconds, token),
+    [token]
+  )
+
   const startChat = useCallback(
     async (userId) => {
       const summary = await startConversation(userId, token)
@@ -349,9 +402,13 @@ export function ChatProvider({ children }) {
       subscribeToMessageDeleted,
       subscribeToReactionAdded,
       subscribeToReactionRemoved,
+      subscribeToLinkPreview,
+      subscribeToMessageExpired,
       subscribeToFriendEvents,
       markConversationRead,
       setConversationMuted,
+      setConversationPinned,
+      changeDisappearing,
       startChat,
     }),
     [
@@ -367,9 +424,13 @@ export function ChatProvider({ children }) {
       subscribeToMessageDeleted,
       subscribeToReactionAdded,
       subscribeToReactionRemoved,
+      subscribeToLinkPreview,
+      subscribeToMessageExpired,
       subscribeToFriendEvents,
       markConversationRead,
       setConversationMuted,
+      setConversationPinned,
+      changeDisappearing,
       startChat,
     ]
   )

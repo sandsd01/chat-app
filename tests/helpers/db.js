@@ -16,6 +16,7 @@ const { createUserWithUniquePublicId } = require("../../src/lib/publicId");
 
 async function resetDb() {
   await prisma.message.deleteMany();
+  await prisma.linkPreview.deleteMany();
   await prisma.conversation.deleteMany();
   await prisma.friendship.deleteMany();
   await prisma.pushSubscription.deleteMany();

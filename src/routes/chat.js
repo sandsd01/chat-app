@@ -7,6 +7,7 @@ const { sendPushToUser } = require("../lib/push");
 const { attachmentsConfigured, createUploadUrl, verifyUploadedObject, createDownloadUrl } = require("../lib/attachments");
 const { createTicketStore } = require("../lib/ticketStore");
 const { PUBLIC_USER_SELECT, toPublicUser } = require("../lib/publicUser");
+const { extractFirstUrl, resolveLinkPreview, withUserFetchSlot } = require("../lib/linkPreview");
 
 const router = express.Router();
 
@@ -131,6 +132,12 @@ function parsePagingParams(req) {
   return { limit, before };
 }
 
+// The caller's own side of a pin — never the other participant's, since it's
+// a private per-user preference the other side never sees.
+function myPinnedAt(conversation, meId) {
+  return conversation.userAId === meId ? conversation.userAPinnedAt : conversation.userBPinnedAt;
+}
+
 async function conversationSummary(conversation, meId) {
   const isUserA = conversation.userAId === meId;
   const other = isUserA ? conversation.userB : conversation.userA;
@@ -149,6 +156,10 @@ async function conversationSummary(conversation, meId) {
     // The CALLER's own mute state — every consumer of this summary is
     // reading it as "do I have this muted," never the other side's.
     muted: isUserA ? conversation.userAMuted : conversation.userBMuted,
+    pinned: Boolean(myPinnedAt(conversation, meId)),
+    // Not per-side, unlike pinned/muted above: both participants share one
+    // timer and both see the same value.
+    disappearingSeconds: conversation.disappearingSeconds,
   };
 }
 
@@ -164,10 +175,17 @@ router.get("/conversations", async (req, res) => {
     },
   });
 
-  // lastMessageAt is only set once a conversation has a message; falling back
-  // to createdAt keeps a brand-new, still-empty conversation from sorting as
-  // if it were older than everything (it would otherwise compare as null).
+  // Pinned conversations sort first (most-recently-pinned first), then
+  // everything else by recency. lastMessageAt is only set once a
+  // conversation has a message; falling back to createdAt keeps a
+  // brand-new, still-empty conversation from sorting as if it were older
+  // than everything (it would otherwise compare as null).
   conversations.sort((a, b) => {
+    const aPinnedAt = myPinnedAt(a, meId);
+    const bPinnedAt = myPinnedAt(b, meId);
+    if (aPinnedAt && bPinnedAt) return bPinnedAt.getTime() - aPinnedAt.getTime();
+    if (aPinnedAt) return -1;
+    if (bPinnedAt) return 1;
     const aTime = (a.lastMessageAt ?? a.createdAt).getTime();
     const bTime = (b.lastMessageAt ?? b.createdAt).getTime();
     return bTime - aTime;
@@ -253,22 +271,29 @@ router.get("/conversations/:id/messages", async (req, res) => {
     },
     orderBy: [{ createdAt: "desc" }, { id: "desc" }],
     take: limit + 1,
+    include: { linkPreview: true },
   });
 
   const hasMore = rows.length > limit;
   const page = rows.slice(0, limit);
 
   const reactionsByMessage = await reactionsForMessages(page.map((m) => m.id), req.user.id);
+  const replyPreviews = await replyPreviewsForMessages(page);
 
   // Presigned GET URLs are minted fresh on every read rather than stored —
   // never a permanent link, and this route already only reaches rows for a
   // conversation the caller is confirmed a participant of (see
   // getConversationForParticipant above).
+  // The joined `linkPreview` relation is destructured out rather than spread:
+  // it carries the raw image bytes, which belong on the image route below and
+  // nowhere near a JSON message list.
   const data = await Promise.all(
-    page.map(async (m) => ({
+    page.map(async ({ linkPreview, ...m }) => ({
       ...m,
       attachmentUrl: m.attachmentKey ? await createDownloadUrl(m.attachmentKey, m.attachmentType) : null,
       reactions: reactionsByMessage.get(m.id) || [],
+      replyTo: m.replyToId ? replyPreviews.get(m.replyToId) || null : null,
+      linkPreview: linkPreviewPayload(linkPreview),
     }))
   );
 
@@ -308,15 +333,66 @@ router.get("/conversations/:id/messages/search", async (req, res) => {
 
   const hasMore = rows.length > limit;
   const page = rows.slice(0, limit);
+  const replyPreviews = await replyPreviewsForMessages(page);
 
   const data = await Promise.all(
     page.map(async (m) => ({
       ...m,
       attachmentUrl: m.attachmentKey ? await createDownloadUrl(m.attachmentKey, m.attachmentType) : null,
+      replyTo: m.replyToId ? replyPreviews.get(m.replyToId) || null : null,
     }))
   );
 
   res.json({ data, hasMore, nextBefore: hasMore ? page[page.length - 1].id : null });
+});
+
+const EXPORT_PAGE_SIZE = 100;
+
+/**
+ * Every message in a conversation, walking the same before-cursor
+ * pagination GET .../messages uses. Normalizes rows into one flat,
+ * portable shape (no presigned attachment URLs — this is a point-in-time
+ * export, not a live view) and returns oldest-first, like a transcript.
+ */
+async function collectAllMessagesForExport(conversationId) {
+  const rows = [];
+  let before;
+
+  for (;;) {
+    const page = await prisma.message.findMany({
+      where: { conversationId, ...(before !== undefined ? { id: { lt: before } } : {}) },
+      orderBy: [{ createdAt: "desc" }, { id: "desc" }],
+      take: EXPORT_PAGE_SIZE,
+    });
+    if (page.length === 0) break;
+    for (const m of page) {
+      rows.push({
+        id: m.id,
+        senderId: m.senderId,
+        body: m.body,
+        createdAt: m.createdAt,
+        editedAt: m.editedAt,
+        deletedAt: m.deletedAt,
+        hasAttachment: Boolean(m.attachmentKey),
+        attachmentName: m.attachmentName,
+      });
+    }
+    before = page[page.length - 1].id;
+    if (page.length < EXPORT_PAGE_SIZE) break;
+  }
+
+  return rows.reverse();
+}
+
+router.get("/conversations/:id/export", async (req, res) => {
+  const conversationId = Number(req.params.id);
+  const conversation = await getConversationForParticipant(conversationId, req.user.id);
+  if (!conversation) return res.status(404).json({ error: "Conversation not found" });
+
+  const messages = await collectAllMessagesForExport(conversationId);
+
+  res.setHeader("Content-Disposition", `attachment; filename="conversation-${conversationId}.json"`);
+  res.json({ conversationId, exportedAt: new Date(), messages });
 });
 
 router.post("/conversations/:id/messages", async (req, res) => {
@@ -332,6 +408,13 @@ router.post("/conversations/:id/messages", async (req, res) => {
     return res.status(403).json({ error: "You can only message accounts you're friends with" });
   }
 
+  // Captured once, before the message is even created, and reused below for
+  // both the "delivered" flag and the push-skip check — the recipient could
+  // in principle connect or disconnect in the gap between two separate
+  // hasSubscribers() calls, and the two would then disagree about whether
+  // the same message SSE-delivered at send time.
+  const deliveredAtSend = chatBus.hasSubscribers(otherUserId);
+
   const rawBody = typeof req.body?.body === "string" ? req.body.body.trim() : "";
   const attachmentKey = typeof req.body?.attachmentKey === "string" ? req.body.attachmentKey : null;
   const attachmentName = typeof req.body?.attachmentName === "string" ? req.body.attachmentName : null;
@@ -341,6 +424,19 @@ router.post("/conversations/:id/messages", async (req, res) => {
   }
   if (rawBody.length > 4000) {
     return res.status(400).json({ error: "body must be 4000 characters or fewer" });
+  }
+
+  // getMessageInConversation already excludes a soft-deleted message
+  // (deletedAt set) — you can't start a new reply quoting one that's
+  // already gone, the same way the UI would never offer a reply action on
+  // a bubble already showing "This message was deleted."
+  const replyToIdRaw = req.body?.replyToId;
+  let replyTarget = null;
+  if (replyToIdRaw !== undefined && replyToIdRaw !== null) {
+    replyTarget = await getMessageInConversation(conversationId, Number(replyToIdRaw));
+    if (!replyTarget) {
+      return res.status(400).json({ error: "replyToId must reference a message in this conversation" });
+    }
   }
 
   let attachmentFields = {
@@ -373,9 +469,24 @@ router.post("/conversations/:id/messages", async (req, res) => {
 
   const body = rawBody || null;
 
+  // Read once, here, and frozen onto the row as an absolute instant. Nothing
+  // later re-reads conversation.disappearingSeconds for this message, which
+  // is exactly why changing the timer can't retroact on messages already
+  // sent — the sender knew this message's lifetime when they sent it.
+  const expiresAt = conversation.disappearingSeconds
+    ? new Date(Date.now() + conversation.disappearingSeconds * 1000)
+    : null;
+
   const message = await prisma.$transaction(async (tx) => {
     const created = await tx.message.create({
-      data: { conversationId, senderId: req.user.id, body, ...attachmentFields },
+      data: {
+        conversationId,
+        senderId: req.user.id,
+        body,
+        replyToId: replyTarget?.id ?? null,
+        expiresAt,
+        ...attachmentFields,
+      },
     });
     await tx.conversation.update({
       where: { id: conversationId },
@@ -390,11 +501,31 @@ router.post("/conversations/:id/messages", async (req, res) => {
     senderId: message.senderId,
     body: message.body,
     createdAt: message.createdAt,
+    expiresAt: message.expiresAt,
     attachmentKey: message.attachmentKey,
     attachmentName: message.attachmentName,
     attachmentMimeType: message.attachmentMimeType,
     attachmentSize: message.attachmentSize,
     attachmentType: message.attachmentType,
+    // True only if the recipient's device had a live SSE connection open at
+    // the moment this was sent — it does not upgrade later if they connect
+    // afterwards but before reading, unlike a real delivery receipt. That's
+    // an intentional scope cut: upgrading it would need a second signal
+    // path (e.g. published on every new /stream connection), and the
+    // sender already gets the strictly-stronger "Read" tick once they do
+    // read it.
+    delivered: deliveredAtSend,
+    // A small snapshot, not a live reference — reusing the exact row
+    // getMessageInConversation already fetched to validate replyToId above,
+    // rather than a second query. If the original is edited or deleted
+    // after this reply is sent, this quoted snippet doesn't follow along;
+    // GET .../messages re-fetches it fresh on every page load instead (see
+    // replyPreviewsForMessages below), so a reload always shows the
+    // original's current state even though this specific SSE/response
+    // payload is frozen at send time.
+    replyTo: replyTarget
+      ? { id: replyTarget.id, senderId: replyTarget.senderId, body: replyTarget.body, deletedAt: replyTarget.deletedAt }
+      : null,
   };
 
   const attachmentUrl = payload.attachmentKey
@@ -413,7 +544,7 @@ router.post("/conversations/:id/messages", async (req, res) => {
   // without awaiting: a slow or failing push must never delay the response
   // the sender is waiting on.
   const otherMuted = otherUserId === conversation.userAId ? conversation.userAMuted : conversation.userBMuted;
-  if (!chatBus.hasSubscribers(otherUserId) && !otherMuted) {
+  if (!deliveredAtSend && !otherMuted) {
     prisma.user
       .findUnique({ where: { id: req.user.id }, select: { name: true, email: true } })
       .then((sender) => {
@@ -433,8 +564,66 @@ router.post("/conversations/:id/messages", async (req, res) => {
       .catch((err) => console.error("Push notification failed:", err));
   }
 
+  schedulePreviewResolution(message, conversation);
+
   res.status(201).json(ssePayload);
 });
+
+// --- Link previews -------------------------------------------------------
+
+/**
+ * The wire shape of a preview. `imageData` deliberately never crosses the
+ * API — the bytes are served by the conversation-scoped image route below, so
+ * a message list stays small and the browser keeps talking only to us.
+ * A "failed" row renders as no card at all.
+ */
+function linkPreviewPayload(preview) {
+  if (!preview || preview.status !== "ok") return null;
+  return {
+    id: preview.id,
+    url: preview.url,
+    title: preview.title,
+    description: preview.description,
+    siteName: preview.siteName,
+    hasImage: Boolean(preview.imageMimeType),
+  };
+}
+
+/**
+ * Resolves a message's link preview out of band and announces it.
+ *
+ * Fire-and-forget, exactly like the push call in POST .../messages and for
+ * the same reason: an unresponsive third-party server must never hold up the
+ * response the sender is waiting on. A failure here is logged and dropped —
+ * the message itself is already sent and is not in question.
+ */
+function schedulePreviewResolution(message, conversation) {
+  const url = extractFirstUrl(message.body);
+  if (!url) return;
+
+  withUserFetchSlot(message.senderId, () => resolveLinkPreview(url))
+    .then(async (preview) => {
+      // null means the sender is already at their concurrent-fetch cap; the
+      // message stands, it just doesn't get a card.
+      if (!preview?.id) return;
+
+      const current = await prisma.message.findUnique({ where: { id: message.id } });
+      // The message may have been edited or deleted while we were off
+      // fetching; attaching a preview now would resurrect a card for content
+      // that no longer exists.
+      if (!current || current.deletedAt || current.body !== message.body) return;
+
+      await prisma.message.update({ where: { id: message.id }, data: { linkPreviewId: preview.id } });
+      const payload = {
+        conversationId: conversation.id,
+        messageId: message.id,
+        linkPreview: linkPreviewPayload(preview),
+      };
+      chatBus.publish(conversation.userAId, "link-preview", payload);
+      chatBus.publish(conversation.userBId, "link-preview", payload);
+    })
+    .catch((err) => console.error("Link preview resolution failed:", err.message));
+}
 
 async function getOwnMessage(conversationId, messageId, userId) {
   if (!Number.isInteger(messageId)) return { status: 404 };
@@ -464,6 +653,15 @@ router.patch("/conversations/:id/messages/:messageId", async (req, res) => {
     data: { body, editedAt: new Date() },
   });
 
+  // Editing a URL out of a message must not leave its card behind, and
+  // editing a different one in should unfurl the new one.
+  const previousUrl = extractFirstUrl(lookup.message.body);
+  const nextUrl = extractFirstUrl(body);
+  if (previousUrl !== nextUrl) {
+    await prisma.message.update({ where: { id: updated.id }, data: { linkPreviewId: null } });
+    schedulePreviewResolution(updated, conversation);
+  }
+
   const payload = { id: updated.id, conversationId, body: updated.body, editedAt: updated.editedAt };
   publishToBoth(conversation, "message-edited", payload);
 
@@ -492,6 +690,7 @@ router.delete("/conversations/:id/messages/:messageId", async (req, res) => {
       attachmentMimeType: null,
       attachmentSize: null,
       attachmentType: null,
+      linkPreviewId: null,
     },
   });
 
@@ -500,6 +699,26 @@ router.delete("/conversations/:id/messages/:messageId", async (req, res) => {
 
   res.json(payload);
 });
+
+/**
+ * Batched lookup of the small quoted-snippet shape for every replyToId on a
+ * page — one query for the whole page rather than one per reply. Re-fetched
+ * fresh on every call (not cached anywhere), so unlike the send-time
+ * payload's frozen replyTo, a reload always reflects the original's
+ * current edited/deleted state.
+ */
+async function replyPreviewsForMessages(messages) {
+  const result = new Map();
+  const ids = [...new Set(messages.map((m) => m.replyToId).filter((id) => id != null))];
+  if (ids.length === 0) return result;
+
+  const rows = await prisma.message.findMany({
+    where: { id: { in: ids } },
+    select: { id: true, senderId: true, body: true, deletedAt: true },
+  });
+  for (const row of rows) result.set(row.id, row);
+  return result;
+}
 
 // --- Reactions ----------------------------------------------------------
 // One row per (message, user, emoji) — see prisma/schema.prisma's
@@ -538,6 +757,28 @@ async function getMessageInConversation(conversationId, messageId) {
   if (!message || message.conversationId !== conversationId || message.deletedAt) return null;
   return message;
 }
+
+// Conversation-scoped rather than a flat /link-previews/:id/image, so it
+// inherits getConversationForParticipant and this app's 404-not-403
+// convention — and so nobody can walk a sequential id space to learn which
+// URLs have been shared on this instance.
+router.get("/conversations/:id/messages/:messageId/link-preview-image", async (req, res) => {
+  const conversationId = Number(req.params.id);
+  const conversation = await getConversationForParticipant(conversationId, req.user.id);
+  if (!conversation) return res.status(404).json({ error: "Conversation not found" });
+
+  const message = await getMessageInConversation(conversationId, Number(req.params.messageId));
+  if (!message?.linkPreviewId) return res.status(404).json({ error: "Not found" });
+
+  const preview = await prisma.linkPreview.findUnique({ where: { id: message.linkPreviewId } });
+  if (!preview?.imageData || !preview.imageMimeType) return res.status(404).json({ error: "Not found" });
+
+  res.setHeader("Content-Type", preview.imageMimeType);
+  // Immutable: a preview is never refetched, so the bytes behind this URL
+  // cannot change.
+  res.setHeader("Cache-Control", "private, max-age=86400, immutable");
+  res.send(Buffer.from(preview.imageData));
+});
 
 router.post("/conversations/:id/messages/:messageId/reactions", async (req, res) => {
   const conversationId = Number(req.params.id);
@@ -639,6 +880,35 @@ router.post("/conversations/:id/read", async (req, res) => {
   res.json({ conversationId: updated.id, lastReadAt });
 });
 
+// Pin is a purely private, per-user preference — unlike read receipts and
+// typing, the other participant is never told about it, so there's no
+// chatBus.publish here.
+router.post("/conversations/:id/pin", async (req, res) => {
+  const conversationId = Number(req.params.id);
+  const conversation = await getConversationForParticipant(conversationId, req.user.id);
+  if (!conversation) return res.status(404).json({ error: "Conversation not found" });
+
+  const isUserA = conversation.userAId === req.user.id;
+  await prisma.conversation.update({
+    where: { id: conversationId },
+    data: isUserA ? { userAPinnedAt: new Date() } : { userBPinnedAt: new Date() },
+  });
+  res.status(204).end();
+});
+
+router.delete("/conversations/:id/pin", async (req, res) => {
+  const conversationId = Number(req.params.id);
+  const conversation = await getConversationForParticipant(conversationId, req.user.id);
+  if (!conversation) return res.status(404).json({ error: "Conversation not found" });
+
+  const isUserA = conversation.userAId === req.user.id;
+  await prisma.conversation.update({
+    where: { id: conversationId },
+    data: isUserA ? { userAPinnedAt: null } : { userBPinnedAt: null },
+  });
+  res.status(204).end();
+});
+
 // Muting only suppresses the push notification a new message would
 // otherwise trigger (see the push-gating in POST .../messages below) — it
 // never touches the SSE "message" event, so an open tab keeps updating
@@ -664,6 +934,36 @@ router.post("/conversations/:id/unmute", async (req, res) => {
   const updated = await setMuted(Number(req.params.id), req.user.id, false);
   if (!updated) return res.status(404).json({ error: "Conversation not found" });
   res.json({ conversationId: updated.id, muted: false });
+});
+
+// Validated against a fixed set rather than any positive integer, so the
+// durations the UI offers and the ones the server will accept can't drift
+// apart. Unlike mute (which is per-side and silent), this is state both
+// participants share and see, so the change is published to both.
+const DISAPPEARING_SECONDS = new Set([300, 3600, 86400, 604800]);
+
+router.post("/conversations/:id/disappearing", async (req, res) => {
+  const conversationId = Number(req.params.id);
+  const conversation = await getConversationForParticipant(conversationId, req.user.id);
+  if (!conversation) return res.status(404).json({ error: "Conversation not found" });
+
+  const raw = req.body?.seconds;
+  // null and 0 both mean "off" — 0 because a client computing a duration is
+  // likelier to land on it than on null.
+  const seconds = raw === null || raw === undefined || raw === 0 ? null : raw;
+  if (seconds !== null && !DISAPPEARING_SECONDS.has(seconds)) {
+    return res.status(400).json({
+      error: `seconds must be null or one of ${[...DISAPPEARING_SECONDS].join(", ")}`,
+    });
+  }
+
+  await prisma.conversation.update({ where: { id: conversationId }, data: { disappearingSeconds: seconds } });
+
+  const payload = { conversationId, seconds };
+  chatBus.publish(conversation.userAId, "disappearing-changed", payload);
+  chatBus.publish(conversation.userBId, "disappearing-changed", payload);
+
+  res.json(payload);
 });
 
 router.post("/stream-ticket", (req, res) => {
